@@ -165,6 +165,7 @@ function fitAll() {
 }
 
 function view(redraw) {
+  closePicker();
   const busy = RO.busy ? h('div', { class: 'banner' }, RO.busy) : null;
   const guard = async (msg, fn) => { RO.busy = msg; redraw(); try { await fn(); } catch (e) { toast(errMsg(e), true); } RO.busy = ''; redraw(); };
 
@@ -224,8 +225,10 @@ function view(redraw) {
     p.canvas.className = 'rcanvas'; wrap.append(p.canvas);
     RO.form.fields.filter((f) => f.page === pi).forEach((f) => {
       const box = h('div', { class: 'rbox' + (edit ? ' edit' : '') + (RO.sel === f.id ? ' sel' : ''), style: `left:${f.x * 100}%;top:${f.y * 100}%;width:${f.w * 100}%;height:${f.h * 100}%;${edit ? `border-color:${KCOLOR[f.kind]};background:${KCOLOR[f.kind]}22` : ''}`, 'data-id': f.id, 'data-kind': f.kind });
-      const txt = textFor(f);
-      box.append(h('span', { class: 'rtxt' }, edit ? '' : txt));
+      const sp = h('span', { class: 'rtxt' });
+      sp.textContent = edit ? '' : textFor(f);
+      if (!edit && f.kind !== 'none' && f.row > 0) { box.classList.add('live'); sp.dataset.ph = KINDS.find((k) => k[0] === f.kind)[1]; makeEditable(sp, f, box, stage); }
+      box.append(sp);
       if (edit) {
         box.append(h('span', { class: 'rtag', style: `background:${KCOLOR[f.kind]}` }, f.kind === 'none' ? '—' : `${KINDS.find((k) => k[0] === f.kind)[1]} ${f.row}`));
         const handle = h('span', { class: 'rhandle' }); box.append(handle);
@@ -272,18 +275,13 @@ function view(redraw) {
         });
       } }, '양식 저장')));
 
-  /* 역할 입력 패널 */
-  const rows = rowCount(), roster = APP.roster();
-  const dl = h('datalist', { id: 'rosterNames' }, roster.map((s) => h('option', { value: s.name })));
-  const roleRows = RO.roles.map((r, i) => h('tr', null,
-    h('td', { class: 'num' }, i + 1),
-    ['name', 'desc', 'owner'].map((k) => h('td', null, h('input', { value: r[k], placeholder: k === 'name' ? '역할명' : k === 'desc' ? '역할 설명' : '담당자', list: k === 'owner' ? 'rosterNames' : null, oninput: (e) => { r[k] = e.target.value; refresh(); } }))),
-    h('td', { class: 'del' }, h('button', { class: 'sm ghost', onclick: () => { RO.roles.splice(i, 1); if (!RO.roles.length) RO.roles.push({ name: '', desc: '', owner: '' }); redraw(); } }, '✕'))));
-  let rt; const refresh = () => { clearTimeout(rt); rt = setTimeout(() => { RO.form.fields.forEach((f) => { const el = stage.querySelector(`.rbox[data-id="${f.id}"] .rtxt`); if (el && !edit) el.textContent = textFor(f); }); fitAll(); }, 120); };
+  /* 역할 입력 패널 (입력은 양식 위의 칸에 직접 합니다) */
+  const rows = rowCount();
   const fillPanel = h('div', { class: 'card' }, h('h3', null, '역할 입력'),
-    rows && RO.roles.length > rows ? h('div', { class: 'banner warn' }, `양식에는 ${rows}줄만 있어서 ${rows + 1}번째부터는 나타나지 않아요.`) : null,
-    h('div', { class: 'table-wrap' }, h('table', { class: 'roster survey rolelist' }, h('thead', null, h('tr', null, ['#', '역할명', '역할 설명', '담당자', ''].map((t) => h('th', null, t)))), h('tbody', null, roleRows))), dl,
-    h('div', { class: 'row', style: 'margin-top:10px' }, h('button', { class: 'sm', onclick: () => { RO.roles.push({ name: '', desc: '', owner: '' }); redraw(); } }, '+ 역할 추가'), h('div', { style: 'flex:1' }),
+    h('div', { class: 'muted', style: 'margin-bottom:12px;line-height:1.65' }, '왼쪽 양식의 칸을 눌러 바로 입력하세요. 담당자 칸을 누르면 학생을 여러 명 골라 넣을 수 있어요. 글자 크기는 칸에 맞게 자동으로 조절돼요.'),
+    h('div', { class: 'row' }, rows ? h('span', { class: 'muted' }, `입력 칸 ${rows}줄`) : h('span', { class: 'banner warn', style: 'margin:0' }, '역할 칸이 없어요. "입력 칸 수정"에서 칸의 종류를 정해 주세요.'),
+      h('div', { style: 'flex:1' }),
+      h('button', { class: 'sm ghost', onclick: () => { if (!confirm('입력한 내용을 모두 지울까요?')) return; RO.roles = [{ name: '', desc: '', owner: '' }]; RO.setName = ''; redraw(); } }, '내용 모두 지우기'),
       h('button', { class: 'sm ghost', onclick: () => { RO.mode = 'edit'; redraw(); } }, '입력 칸 수정')),
     h('div', { class: 'row', style: 'margin-top:12px;border-top:1px solid var(--line);padding-top:12px' },
       setSel,
@@ -299,9 +297,69 @@ function view(redraw) {
     h('div', { class: 'role-layout' }, h('div', { class: 'role-stage-wrap' }, stage), edit ? panel : fillPanel));
 }
 
+
+/* ---------- 양식 위에서 바로 입력 ---------- */
+function setRole(f, v) {
+  while (RO.roles.length < f.row) RO.roles.push({ name: '', desc: '', owner: '' });
+  RO.roles[f.row - 1][f.kind] = v;
+}
+let fitTimer;
+const scheduleFit = () => { clearTimeout(fitTimer); fitTimer = setTimeout(fitAll, 100); };
+const tokens = (t) => t.split(/[,，、/\n]+/).map((x) => x.trim()).filter(Boolean);
+function makeEditable(sp, f, box, stage) {
+  try { sp.contentEditable = 'plaintext-only'; } catch (e) { /* 일부 브라우저는 아래에서 대체 */ }
+  if (sp.contentEditable !== 'plaintext-only') sp.contentEditable = 'true';
+  sp.spellcheck = false;
+  sp.addEventListener('paste', (e) => { e.preventDefault(); document.execCommand('insertText', false, (e.clipboardData || window.clipboardData).getData('text')); });
+  sp.addEventListener('keydown', (e) => { if (e.key === 'Escape') { closePicker(); sp.blur(); } });
+  sp.addEventListener('input', () => {
+    let v = sp.innerText.replace(/\n+$/, '');
+    if (!v.trim()) { v = ''; if (sp.textContent) sp.textContent = ''; }
+    setRole(f, v);
+    stage.querySelectorAll('.rbox.live').forEach((b) => {            // 여러 쪽에 같은 칸이 있으면 같이 바꾸기
+      const o = RO.form.fields.find((x) => x.id === b.dataset.id);
+      if (o && o.id !== f.id && o.kind === f.kind && o.row === f.row) b.querySelector('.rtxt').textContent = v;
+    });
+    scheduleFit(); if (f.kind === 'owner') refreshPicker();
+  });
+  if (f.kind === 'owner') sp.addEventListener('focus', () => openPicker(box, f, sp));
+}
+let picker = null;
+function closePicker() { if (picker) { document.removeEventListener('pointerdown', picker.out, true); picker.el.remove(); picker = null; } }
+function openPicker(box, f, sp) {
+  if (picker && picker.sp === sp) return;
+  closePicker();
+  const el = h('div', { class: 'picker' });
+  const out = (e) => { if (!el.contains(e.target) && !box.contains(e.target)) closePicker(); };
+  picker = { el, box, f, sp, out };
+  document.body.append(el); document.addEventListener('pointerdown', out, true);
+  refreshPicker();
+}
+function refreshPicker() {
+  if (!picker) return;
+  const { el, box, sp } = picker, cur = tokens(sp.innerText);
+  const toggle = (name) => {
+    const c = tokens(sp.innerText), i = c.indexOf(name);
+    if (i >= 0) c.splice(i, 1); else c.push(name);
+    sp.textContent = c.join(', ');
+    if (document.activeElement === sp) { const r = document.createRange(); r.selectNodeContents(sp); r.collapse(false); const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r); }
+    sp.dispatchEvent(new Event('input'));
+  };
+  const keep = (e) => e.preventDefault();
+  el.replaceChildren(
+    h('div', { class: 'muted', style: 'margin-bottom:8px' }, '눌러서 여러 명을 고를 수 있어요 (직접 입력해도 돼요)'),
+    h('div', { class: 'pchips' }, APP.roster().map((s) => h('button', { class: 'pchip ' + APP.gcls(s.gender) + (cur.includes(s.name) ? ' on' : ''), onmousedown: keep, onclick: () => toggle(s.name) }, s.name))),
+    h('div', { class: 'row', style: 'margin-top:8px;justify-content:space-between' }, h('span', { class: 'muted' }, cur.length ? `${cur.length}명 선택` : ''), h('button', { class: 'sm', onmousedown: keep, onclick: closePicker }, '닫기')));
+  const r = box.getBoundingClientRect(), w = Math.min(400, window.innerWidth - 16);
+  el.style.width = w + 'px'; el.style.left = Math.max(8, Math.min(r.left, window.innerWidth - w - 8)) + 'px';
+  let top = r.bottom + 6; if (top + el.offsetHeight > window.innerHeight - 8) top = Math.max(8, r.top - el.offsetHeight - 6);
+  el.style.top = top + 'px';
+}
+
 /* PNG 저장: 양식 이미지 위에 글자를 그려 넣기 */
-function exportPng() {
+async function exportPng() {
   const stage = document.querySelector('.rstage'); if (!stage) return;
+  try { await Promise.all([document.fonts.load('400 20px Pretendard'), document.fonts.load('700 20px Pretendard')]); } catch (e) { /* 글꼴 없으면 기본 글꼴 */ }
   RO.pages.forEach((p, pi) => {
     const out = document.createElement('canvas'); out.width = p.canvas.width; out.height = p.canvas.height;
     const ctx = out.getContext('2d'); ctx.drawImage(p.canvas, 0, 0);
