@@ -446,55 +446,95 @@ function queueBoardSave(b) {
 }
 function updSave() { const el = $('#saveState'); if (el) el.textContent = S.saveText; }
 
+let relayoutSub = null;
 function pageSubmit() {
-  const wrap = h('div');
+  const wrap = h('div', { class: 'sub-full' });
   const roster = S.roster.slice().sort(byNum);
-  const cur = S.boards.find((b) => b.id === S.curBoard);
-
-  const chips = h('div', { class: 'chips' },
-    S.boards.map((b) => h('button', { class: 'chip' + (b.id === S.curBoard ? ' active' : ''), onclick: () => { S.curBoard = b.id; renderPage(); } }, b.title || '(제목 없음)')),
-    h('button', { class: 'chip add', onclick: async () => {
-      const b = { id: 'b' + Date.now().toString(36), title: '', locked: false, done: [], created: Date.now() };
-      S.boards.push(b); S.curBoard = b.id; renderPage(); queueBoardSave(b);
-    } }, '+ 새 제출판'));
-  wrap.append(chips);
-
-  if (!cur) { wrap.append(h('div', { class: 'card placeholder' }, '제출판이 없습니다. "+ 새 제출판"을 눌러 만들어 보세요.')); return wrap; }
   if (!roster.length) { wrap.append(h('div', { class: 'card placeholder' }, '명렬표가 비어 있습니다. 학급 기초설정에서 학생을 먼저 입력해 주세요.')); return wrap; }
-
-  const doneSet = new Set(cur.done);
-  const countEl = h('span', { class: 'count' });
-  const upCount = () => { countEl.textContent = `제출 ${doneSet.size} / ${roster.length}`; fsCount.textContent = countEl.textContent; };
-  const title = h('input', { class: 'title', value: cur.title, placeholder: '과제명을 입력하세요', disabled: cur.locked,
-    oninput: (e) => { cur.title = e.target.value; fsTitle.textContent = cur.title; queueBoardSave(cur); const active = $('.chip.active'); if (active) active.textContent = cur.title || '(제목 없음)'; } });
-  const lockBtn = h('button', { class: cur.locked ? 'primary' : '', onclick: () => { cur.locked = !cur.locked; queueBoardSave(cur); renderPage(); } }, cur.locked ? '잠김 · 해제' : '잠금');
-  const fsTitle = h('span', null, cur.title), fsCount = h('span', null);
-
-  wrap.append(h('div', { class: 'sub-top' }, title, countEl, h('span', { class: 'save-state', id: 'saveState' }, S.saveText), lockBtn,
-    h('button', { onclick: () => { const w = $('.sub-wrap'); (document.fullscreenElement ? document.exitFullscreen() : w.requestFullscreen && w.requestFullscreen()); } }, '전체화면'),
-    h('button', { disabled: cur.locked, onclick: () => { if (!confirm('이 제출판의 제출 표시를 모두 지울까요?')) return; cur.done = []; queueBoardSave(cur); renderPage(); } }, '초기화'),
-    h('button', { class: 'danger', disabled: cur.locked, onclick: async () => {
-      if (!confirm(`"${cur.title || '제목 없음'}" 제출판을 삭제할까요?`)) return;
-      try { await api('deleteBoard', { id: cur.id }); S.boards = S.boards.filter((b) => b.id !== cur.id); S.curBoard = S.boards.length ? S.boards[0].id : null; renderPage(); }
-      catch (e) { toast(errMsg(e), true); }
-    } }, '삭제')));
-
   const n = roster.length, cols = Math.ceil(Math.sqrt(n)), rows = Math.ceil(n / cols);
-  const grid = h('div', { class: 'sub-grid' + (cur.locked ? ' locked' : ''), style: `--cols:${cols};--rows:${rows};grid-template-columns:repeat(${cols},1fr)` },
-    roster.map((s) => {
-      const cell = h('div', { class: 'cell' + (doneSet.has(s.num) ? ' done' : '') }, h('span', { class: 'no' }, s.num), h('span', { class: 'nm' }, s.name));
+  const area = h('div', { class: 'sub-area' });
+  const saveState = h('span', { class: 'save-state', id: 'saveState' }, S.saveText);
+  const entries = [];
+
+  const addBtn = h('button', { class: 'primary', onclick: () => {
+    const b = { id: 'b' + Date.now().toString(36), title: '', locked: false, done: [], created: Date.now() };
+    S.boards.push(b); addBoard(b); layout(); queueBoardSave(b);
+    const inp = entries[entries.length - 1].title; if (inp) inp.focus();
+  } }, '+ 제출판 추가');
+  const allLock = h('button', { onclick: () => {
+    const lockAll = S.boards.some((b) => !b.locked);
+    S.boards.forEach((b) => { b.locked = lockAll; queueBoardSave(b); });
+    entries.forEach(syncLock);
+  } }, '전체 잠금/해제');
+  const fsBtn = h('button', { onclick: () => { document.fullscreenElement ? document.exitFullscreen() : (wrap.requestFullscreen && wrap.requestFullscreen()); } }, '전체화면');
+  const bar = h('div', { class: 'sub-bar' }, addBtn, allLock, fsBtn, saveState, h('span', { class: 'muted' }, '제출판을 추가하면 한 화면에 맞게 자동으로 나눠 보여요'));
+  wrap.append(bar, area);
+
+  function syncLock(e) {
+    const b = e.board;
+    e.title.disabled = b.locked; e.lockBtn.textContent = b.locked ? '잠김' : '잠금'; e.lockBtn.className = 'sm ' + (b.locked ? 'primary' : '');
+    e.del.disabled = b.locked; e.el.classList.toggle('locked', b.locked);
+  }
+  function addBoard(b) {
+    const doneSet = new Set(b.done);
+    const count = h('span', { class: 'count' });
+    const up = () => { count.textContent = `${doneSet.size}/${n}`; };
+    const title = h('input', { class: 'title', value: b.title, placeholder: '과제명', oninput: (ev) => { b.title = ev.target.value; queueBoardSave(b); } });
+    const lockBtn = h('button', { onclick: () => { b.locked = !b.locked; queueBoardSave(b); syncLock(e); } });
+    const del = h('button', { class: 'sm ghost', title: '삭제', onclick: async () => {
+      if (!confirm(`"${b.title || '제목 없음'}" 제출판을 삭제할까요?`)) return;
+      try { await api('deleteBoard', { id: b.id }); S.boards = S.boards.filter((x) => x.id !== b.id); entries.splice(entries.indexOf(e), 1); e.el.remove(); syncEmpty(); layout(); }
+      catch (x) { toast(errMsg(x), true); }
+    } }, '✕');
+    const reset = h('button', { class: 'sm ghost', title: '제출 표시 모두 지우기', onclick: () => {
+      if (b.locked || !confirm('이 제출판의 제출 표시를 모두 지울까요?')) return;
+      doneSet.clear(); b.done = []; grid.querySelectorAll('.scell').forEach((c) => c.classList.remove('done')); up(); queueBoardSave(b);
+    } }, '초기화');
+    const grid = h('div', { class: 'sbd-grid', style: `grid-template-columns:repeat(${cols},var(--cw))` }, roster.map((st) => {
+      const k = st.name.length <= 2 ? 0.42 : st.name.length === 3 ? 0.3 : st.name.length === 4 ? 0.23 : 0.18;
+      const cell = h('div', { class: 'scell' + (doneSet.has(st.num) ? ' done' : ''), style: `--k:${k}` }, h('span', { class: 'nm' }, st.name));
       cell.addEventListener('click', () => {
-        if (cur.locked) return;
-        if (doneSet.has(s.num)) doneSet.delete(s.num); else doneSet.add(s.num);
-        cell.classList.toggle('done', doneSet.has(s.num));
-        cur.done = [...doneSet].sort((a, b) => a - b); upCount(); queueBoardSave(cur);
+        if (b.locked) return;
+        if (doneSet.has(st.num)) doneSet.delete(st.num); else doneSet.add(st.num);
+        cell.classList.toggle('done', doneSet.has(st.num));
+        b.done = [...doneSet].sort((x, y) => x - y); up(); queueBoardSave(b);
       });
       return cell;
     }));
-  wrap.append(h('div', { class: 'sub-wrap' }, h('div', { class: 'fs-head' }, fsTitle, ' · ', fsCount), grid));
-  upCount();
+    const el = h('div', { class: 'sbd' }, h('div', { class: 'sbd-head' }, title, count, reset, lockBtn, del), grid);
+    const e = { board: b, el, title, lockBtn, del };
+    entries.push(e); area.append(el); up(); syncLock(e); if (typeof syncEmpty === 'function') syncEmpty();
+  }
+
+  function layout() {
+    const cnt = entries.length;
+    if (!cnt) { area.style.height = 'auto'; area.style.gridTemplateRows = ''; area.style.gridTemplateColumns = '1fr'; return; }
+    const top = area.getBoundingClientRect().top;
+    const H = Math.max(220, window.innerHeight - top - (document.fullscreenElement ? 14 : 52)), W = area.clientWidth, GAP = 12, HEAD = 46, PAD = 18, CG = 4;
+    let best = null;
+    for (let r = 1; r <= cnt; r++) {
+      const c = Math.ceil(cnt / r), slotW = (W - (c - 1) * GAP) / c, slotH = (H - (r - 1) * GAP) / r;
+      const narrow = slotW < 400, hd = narrow ? 84 : HEAD;
+      const sw = (slotW - PAD - (cols - 1) * CG) / cols, sh = (slotH - hd - PAD - (rows - 1) * CG) / rows;
+      const cw = Math.min(sw, sh * 1.6), ch = Math.min(sh, cw);   // 이름이 가로로 길어서 칸을 약간 넓게
+      if (!best || cw * ch > best.cw * best.ch) best = { r, c, cw, ch, narrow };
+    }
+    const cw = Math.max(14, Math.min(220, Math.floor(best.cw))), ch = Math.max(12, Math.min(150, Math.floor(best.ch)));
+    area.style.height = H + 'px';
+    entries.forEach((e) => e.el.classList.toggle('narrow', best.narrow));
+    area.style.setProperty('--cw', cw + 'px'); area.style.setProperty('--ch', ch + 'px');
+    area.style.gridTemplateColumns = `repeat(${best.c}, minmax(0, 1fr))`;
+    area.style.gridTemplateRows = `repeat(${best.r}, minmax(0, 1fr))`;
+  }
+  const emptyMsg = h('div', { class: 'card placeholder', style: 'grid-column:1/-1' }, '제출판이 없습니다. "+ 제출판 추가"를 눌러 만들어 보세요.');
+  function syncEmpty() { if (entries.length) emptyMsg.remove(); else area.append(emptyMsg); }
+  S.boards.forEach(addBoard); syncEmpty();
+  relayoutSub = () => { if (wrap.isConnected) layout(); };
+  requestAnimationFrame(layout);
   return wrap;
 }
+window.addEventListener('resize', () => relayoutSub && relayoutSub());
+document.addEventListener('fullscreenchange', () => setTimeout(() => relayoutSub && relayoutSub(), 60));
 
 /* ---------- 다른 파일(page_*.js)에서 쓰는 공통 도구 ---------- */
 async function kvGet(keys) {
