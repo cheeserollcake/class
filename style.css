@@ -256,3 +256,8 @@ svg text { font-family: Pretendard, 'Pretendard Variable', -apple-system, 'Apple
 .pchip.m { background: var(--male); } .pchip.f { background: var(--female); }
 .pchip.on { border-color: var(--text); font-weight: 700; }
 @media print { .rbox.live { outline: none !important; background: transparent !important; } .rbox.live .rtxt:empty::before { content: '' !important; } }
+
+/* 자리 줄 이름 (칠판 아래) */
+.col-labels { display: grid; gap: 6px; margin-bottom: 6px; }
+.col-label { width: 100%; min-width: 0; text-align: center; font-weight: 700; font-size: 14px; padding: 4px 2px; background: #eef0f3; border: 1px solid var(--line); border-radius: 4px; color: var(--text); }
+.col-label.ro { padding: 4px 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

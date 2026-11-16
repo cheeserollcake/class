@@ -39,7 +39,7 @@ const ERR = {
 const errMsg = (e) => ERR[e.message] || ('오류: ' + e.message);
 
 /* ---------- 상태 ---------- */
-const defaultSeat = () => ({ cols: 6, rows: 5, cells: Array(30).fill(1), gw: 2, gh: 1, mode: 'mixed', fixed: [], avoid: [], noRepeat: 0 });
+const defaultSeat = () => ({ cols: 6, rows: 5, cells: Array(30).fill(1), gw: 2, gh: 1, colNames: [], mode: 'mixed', fixed: [], avoid: [], noRepeat: 0 });
 const S = {
   token: null, email: '', unlocked: false, pw: '', defaultPw: true,
   roster: [], seat: defaultSeat(), boards: [],
@@ -400,6 +400,9 @@ function seatEditor() {
       h('label', null, h('input', { type: 'radio', name: 'em', checked: ui.editMode === 'toggle', onchange: () => { ui.editMode = 'toggle'; ui.sel = null; rerender(); } }), '사용 안 함 켜고 끄기')),
     ui.pick != null ? h('div', { class: 'banner' }, `${stuName(ui.pick)} 학생의 고정 자리를 그림에서 눌러 주세요. `, h('button', { class: 'sm', onclick: () => { ui.pick = null; rerender(); } }, '취소')) : null,
     h('div', { class: 'board-front' }, '칠 판'),
+    h('div', { class: 'col-labels', style: `grid-template-columns:repeat(${d.cols},1fr)` },
+      Array.from({ length: d.cols }, (_, c) => h('input', { class: 'col-label', value: (d.colNames && d.colNames[c]) || String(c + 1), placeholder: String(c + 1), title: '줄 이름 (바꿀 수 있어요)', maxlength: 8,
+        oninput: (e) => { d.colNames = d.colNames || []; d.colNames[c] = e.target.value.trim() === String(c + 1) ? '' : e.target.value; } }))),
     grid,
     h('div', { class: 'row', style: 'margin-top:12px' },
       h('span', { class: 'muted' }, '짝·모둠 묶음'), gwIn, h('span', null, '칸 ×'), ghIn, h('span', null, '칸'),

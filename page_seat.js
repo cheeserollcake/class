@@ -231,7 +231,9 @@ function view(redraw) {
     asg && SE.cur && SE.cur.notes && SE.cur.notes.length ? h('div', { class: 'banner warn' }, SE.cur.notes.join(' / ')) : null,
     h('div', { class: 'card' },
       banner,
-      h('div', { class: 'board-front' }, '칠 판'), grid,
+      h('div', { class: 'board-front' }, '칠 판'),
+      h('div', { class: 'col-labels', style: `grid-template-columns:repeat(${geo.cols},1fr)` }, Array.from({ length: geo.cols }, (_, c) => h('div', { class: 'col-label ro' }, (cfg.colNames && cfg.colNames[c]) || String(c + 1)))),
+      grid,
       h('div', { class: 'muted', style: 'margin-top:10px' }, asg ? (SE.loadedName ? `불러온 자리: ${SE.loadedName} · ` : '') + '두 자리를 차례로 누르면 서로 바꿀 수 있어요. 마음에 들면 "저장"을 누르세요.' : '"자리 섞기"를 누르면 설정한 규칙대로 자리가 정해져요.')));
 }
 })();
