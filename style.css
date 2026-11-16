@@ -205,7 +205,7 @@ button.big { font-size: 16px; padding: 10px 22px; }
 .rpage { position: relative; background: #fff; border: 1px solid var(--line); }
 .rcanvas { display: block; width: 100%; height: auto; }
 .rbox { position: absolute; display: flex; align-items: center; overflow: hidden; }
-.rbox .rtxt { display: block; line-height: 1.15; color: #111; padding: 0 2px; word-break: break-all; white-space: pre-wrap; max-width: 100%; }
+.rbox .rtxt { display: block; line-height: 1.15; color: #111; padding: 0 2px; word-break: keep-all; overflow-wrap: normal; white-space: pre-wrap; max-width: 100%; text-align: center; text-wrap: balance; }
 .rbox.edit { border: 2px solid; cursor: move; touch-action: none; overflow: visible; }
 .rbox.edit.sel { outline: 3px solid #1f2937; outline-offset: 1px; }
 .rtag { position: absolute; left: -2px; top: -18px; font-size: 11px; color: #fff; padding: 1px 6px; border-radius: 3px; white-space: nowrap; pointer-events: none; }
