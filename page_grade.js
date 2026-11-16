@@ -65,7 +65,7 @@ async function exportSheet(name, rows) {
 APP.pages.grade = () => {
   const wrap = h('div'), body = h('div'), tabs = h('div', { class: 'tabs' });
   const drawTabs = () => tabs.replaceChildren(...[['perf', '수행평가 관리'], ['etc', '기타 평가 관리'], ['trend', '성적 추이'], ['view', '성적 조회']].map(([id, n]) =>
-    h('button', { class: 'tab' + (GR.tab === id ? ' active' : ''), onclick: () => { GR.tab = id; drawTabs(); draw(); } }, n)));
+    h('button', { class: 'tab' + (GR.tab === id ? ' active' : ''), onclick: () => { GR.tab = id; drawTabs(); draw(); } }, n)), h('div', { style: 'flex:1' }), h('button', { class: 'sm', onclick: exportGrades }, '내보내기'));
   const draw = async () => {
     body.replaceChildren(APP.loading());
     try {
@@ -81,6 +81,25 @@ APP.pages.grade = () => {
   wrap.append(tabs, body); drawTabs(); draw();
   return wrap;
 };
+
+async function exportGrades() {
+  try { await ensure(); await loadAll(); } catch (e) { return toast(errMsg(e), true); }
+  const roster = APP.roster(), asm = assessments(), items = [];
+  const bandName = (cuts, sc) => { const b = bandIdx(cuts, sc); return b < 0 ? '' : GR.cfg.labels[b]; };
+  if (asm.length) items.push({ id: 'all', group: '종합', label: '전체 성적표 (학생 × 평가)', name: '성적_전체', rows: [['번호', '이름', ...asm.map((a) => a.label)], ...roster.map((s) => [s.num, s.name, ...asm.map((a) => scoreOf(a, s.num))])] });
+  ['1', '2'].forEach((sem) => GR.cfg.perf[sem].forEach((sb) => {
+    const d = GR.data[perfKey(sem, sb.id)] || { scores: {} }, sc = (s, it) => num(d.scores && d.scores[s.num] && d.scores[s.num][it.id]);
+    items.push({ id: `p${sem}${sb.id}`, group: '수행평가', label: `${sem}학기 ${sb.name}`, name: `성적_${sem}학기_${sb.name}`,
+      rows: [['번호', '이름', ...sb.items.map((i) => `${i.name}(${i.max})`), ...sb.items.map((i) => `${i.name} 평어`)], ...roster.map((s) => [s.num, s.name, ...sb.items.map((it) => sc(s, it)), ...sb.items.map((it) => bandName(it.cuts, sc(s, it)))])] });
+  }));
+  GR.cfg.evals.forEach((ev) => {
+    const d = GR.data[evalKey(ev.id)] || { scores: {}, answers: {} }, ans = ev.type === 'answers', max = evMax(ev);
+    const head = ['번호', '이름', ...(ans ? ev.items.map((_, i) => `${i + 1}번`) : []), '총점', ev.cut != null ? '기준 도달' : ''];
+    const body = roster.map((s) => { const t = evalTotal(ev, d, s.num); return [s.num, s.name, ...(ans ? ev.items.map((_, i) => ((d.answers || {})[s.num] || [])[i] || '') : []), t, ev.cut != null && t != null ? (t >= ev.cut ? '도달' : '미도달') : '']; });
+    items.push({ id: 'e' + ev.id, group: '기타 평가', label: ev.name, name: `성적_${ev.name}`, rows: [head, ...(ans ? [['', '정답', ...ev.items.map((i) => i.ans), max, '']] : []), ...body] });
+  });
+  APP.exporter.open({ title: '성적', items, empty: '내보낼 평가가 아직 없어요' });
+}
 
 const semToggle = (redraw) => h('div', { class: 'tabs' }, ['1', '2'].map((s) =>
   h('button', { class: 'tab sm' + (GR.sem === s ? ' active' : ''), onclick: () => { GR.sem = s; GR.subId = null; redraw(); } }, s + '학기')));

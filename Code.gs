@@ -120,6 +120,9 @@ function handle_(req) {
     /* 성적표를 시트에 보기 좋게 내보내기 */
     case 'writeTable': checkPw_(req.pw); return locked_(function () { writeTable_(req.name, req.rows); return { ok: true }; });
 
+    /* 내보내기: 새 구글 스프레드시트를 만들어 주소를 돌려줌 */
+    case 'exportSheet': return exportSheet_(req.title, req.sheets);
+
     /* 구글 드라이브 파일 (역할 양식 PDF) */
     case 'uploadFile': return uploadFile_(req);
     case 'getFile': return getFile_(String(req.fileId));
@@ -356,4 +359,27 @@ function delFile_(id) {
   if (!inFolder_(f)) fail_('FORBIDDEN');
   f.setTrashed(true);
   return { ok: true };
+}
+
+
+/* 새 스프레드시트를 만들어 시트(탭)마다 표를 채웁니다 */
+function exportSheet_(title, sheets) {
+  var ss = SpreadsheetApp.create(String(title || '학급관리 내보내기').slice(0, 100));
+  var first = ss.getSheets()[0], used = {};
+  (sheets || []).slice(0, 40).forEach(function (s) {
+    var nm = String(s.name || '시트').replace(/[\[\]\*\?:\/\\]/g, ' ').trim().slice(0, 90) || '시트', base = nm, k = 2;
+    while (used[nm]) nm = base.slice(0, 85) + ' ' + (k++);
+    used[nm] = 1;
+    var sh = ss.insertSheet(nm);
+    var rows = (s.rows || []).slice(0, 2000), w = rows.reduce(function (m, r) { return Math.max(m, r.length); }, 1);
+    var vals = rows.map(function (r) {
+      var o = [];
+      for (var i = 0; i < w; i++) { var v = r[i]; if (v == null) v = ''; if (typeof v === 'string' && /^[=+\-@]/.test(v)) v = "'" + v; o.push(v); }
+      return o;
+    });
+    if (vals.length) { sh.getRange(1, 1, vals.length, w).setValues(vals); sh.getRange(1, 1, 1, w).setFontWeight('bold'); }
+    sh.autoResizeColumns(1, w);
+  });
+  if (ss.getSheets().length > 1) ss.deleteSheet(first);
+  return { ok: true, url: ss.getUrl() };
 }

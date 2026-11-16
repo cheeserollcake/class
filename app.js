@@ -2,7 +2,8 @@
 (() => {
 'use strict';
 const CFG = window.APP_CONFIG || {};
-const DEMO = !CFG.CLIENT_ID || !CFG.API_URL;
+const DEMO = new URLSearchParams(location.search).has('demo');   // 주소 뒤에 ?demo 를 붙였을 때만 체험(데모) 모드
+const CONFIGURED = !!(CFG.CLIENT_ID && CFG.API_URL);
 const $ = (s, el = document) => el.querySelector(s);
 const clone = (o) => JSON.parse(JSON.stringify(o));
 
@@ -45,7 +46,7 @@ const S = {
   token: null, email: '', unlocked: false, pw: '', defaultPw: true,
   roster: [], seat: defaultSeat(), boards: [],
   tab: 'submit', setupSub: 'roster',
-  rosterDraft: null, rosterDirty: false, showPaste: false,
+  rosterDraft: null, rosterDirty: false, showPaste: false, showUpload: false,
   seatDraft: null, seatUi: { editMode: 'move', sel: null, pick: null },
   curBoard: null, saveText: ''
 };
@@ -121,7 +122,7 @@ function onCredential(resp) {
 let gsiReady = false;
 function initGsi() {
   if (gsiReady) return;
-  google.accounts.id.initialize({ client_id: CFG.CLIENT_ID, callback: onCredential, auto_select: true });
+  google.accounts.id.initialize({ client_id: CFG.CLIENT_ID, callback: onCredential, auto_select: false });
   gsiReady = true;
 }
 function loginCard(note) {
@@ -244,6 +245,37 @@ const FIELDS = [
 ];
 const blankRow = (num) => ({ num, name: '', gender: '', phone: '', birth: '', note: '', title: '', b1: '', b2: '', b3: '' });
 const byNum = (a, b) => Number(a.num) - Number(b.num);
+/* 성별 인식: 남/여, 남성/여성, 남자/여자, M/F, male/female */
+const normGender = (v) => { const t = String(v == null ? '' : v).trim().toLowerCase(); return /^(남|m)/.test(t) ? '남' : /^(여|f)/.test(t) ? '여' : ''; };
+const ROSTER_HEADS = { num: ['번호', '출석번호', '학번', 'no', 'num', '번'], name: ['이름', '성명', '학생이름', '학생명', 'name'], gender: ['성별', '남녀', 'gender', 'sex'], phone: ['연락처', '전화번호', '전화', '휴대폰', '핸드폰', 'phone', 'tel'],
+  birth: ['생년월일', '생일', '생년', 'birth', 'birthday'], note: ['특기사항', '특이사항', '메모', 'note'], title: ['호칭', '별칭', '애칭', '부르는이름'], b1: ['비고1', '비고 1'], b2: ['비고2', '비고 2'], b3: ['비고3', '비고 3'] };
+const ROSTER_TEMPLATE_HEAD = ['출석번호', '이름', '성별', '연락처', '생년월일', '특기사항', '호칭', '비고1', '비고2', '비고3'];
+const excelDate = (n) => { const d = new Date(Math.round((n - 25569) * 86400000)); return d.getUTCFullYear() + '-' + String(d.getUTCMonth() + 1).padStart(2, '0') + '-' + String(d.getUTCDate()).padStart(2, '0'); };
+/* 2차원 표 → 명렬표 행들 (머리글 이름으로 열을 찾고, 없으면 양식 순서대로) */
+function rowsToRoster(table) {
+  const norm = (x) => String(x == null ? '' : x).replace(/\s+/g, '').toLowerCase();
+  const rows = table.filter((r) => r.some((c) => String(c == null ? '' : c).trim() !== ''));
+  if (!rows.length) return { list: [], warn: ['내용이 비어 있어요'] };
+  const keys = FIELDS.map((f) => f[0]), map = {};
+  let start = 0;
+  const head = rows[0].map(norm);
+  head.forEach((t, ci) => { const k = Object.keys(ROSTER_HEADS).find((key) => ROSTER_HEADS[key].map(norm).includes(t)); if (k && map[k] == null) map[k] = ci; });
+  if (map.name != null) start = 1; else { Object.keys(map).forEach((k) => delete map[k]); keys.forEach((k, i) => { map[k] = i; }); if (isNaN(Number(rows[0][0])) && rows[0][0] !== '') start = 1; }
+  const warn = [], list = [], seen = new Set();
+  rows.slice(start).forEach((r, i) => {
+    const o = blankRow(0); keys.forEach((k) => { if (map[k] != null && r[map[k]] != null) o[k] = String(r[map[k]]).trim(); });
+    if (!o.name) { if (o.num || o.phone) warn.push(`${i + 1}번째 줄: 이름이 없어 건너뛰었어요`); return; }
+    const raw = o.gender; o.gender = normGender(o.gender);
+    if (raw && !o.gender) warn.push(`${o.name}: 성별 "${raw}"을(를) 알아보지 못했어요 (비워 둠)`);
+    if (!raw) warn.push(`${o.name}: 성별이 비어 있어요`);
+    const bn = Number(o.birth); if (map.birth != null && typeof r[map.birth] === 'number' && bn > 10000 && bn < 80000) o.birth = excelDate(bn);
+    let n = Number(o.num); if (!n || n < 1 || seen.has(n)) { if (n && seen.has(n)) warn.push(`${o.name}: 번호 ${n}이(가) 겹쳐서 새 번호를 붙였어요`); n = 0; }
+    o.num = n; if (n) seen.add(n);
+    list.push(o);
+  });
+  let next = 1; list.forEach((o) => { if (!o.num) { while (seen.has(next)) next++; o.num = next; seen.add(next); } });
+  return { list, warn };
+}
 const gcls = (g) => (g === '남' ? 'm' : g === '여' ? 'f' : '');
 
 function rosterEditor() {
@@ -299,23 +331,69 @@ function rosterEditor() {
         const r = blankRow(parsed.length + 1);
         keys.forEach((k, j) => { if (c[j] !== undefined) r[k] = c[j].trim(); });
         if (!Number(r.num)) r.num = parsed.length + 1;
-        r.gender = /^(남|m)/i.test(r.gender) ? '남' : /^(여|f)/i.test(r.gender) ? '여' : '';
+        r.gender = normGender(r.gender);
         parsed.push(r);
       });
       if (!parsed.length) return toast('붙여넣은 내용이 없습니다', true);
       S.rosterDraft = parsed; S.rosterDirty = true; S.showPaste = false; renderPage();
     } }, '적용'), h('button', { class: 'sm', onclick: () => { S.showPaste = false; renderPage(); } }, '닫기')));
 
+  /* 엑셀·CSV 파일로 일괄 등록 */
+  const upMsg = h('div', { class: 'muted', style: 'margin-top:8px;line-height:1.7' });
+  const upFile = h('input', { type: 'file', accept: '.xlsx,.csv,.tsv,.txt', hidden: true, onchange: async (e) => {
+    const f = e.target.files[0]; e.target.value = ''; if (!f) return;
+    try {
+      const { list, warn } = rowsToRoster(await APP.xl.readTableFile(f));
+      if (!list.length) return toast('등록할 학생을 찾지 못했어요. 양식의 "이름" 열을 확인해 주세요', true);
+      confirmUpload(list, warn, f.name);
+    } catch (x) { toast(errMsg(x), true); }
+  } });
+  const confirmUpload = (list, warn, fname) => {
+    const mode = { v: 'replace' };
+    const close = () => ov.remove();
+    const gm = list.filter((x) => x.gender === '남').length, gf = list.filter((x) => x.gender === '여').length;
+    const ov = h('div', { class: 'overlay' }, h('div', { class: 'modal xdlg' },
+      h('h3', null, '업로드한 명렬표 확인'),
+      h('div', null, `${fname} — 학생 ${list.length}명 (남 ${gm} · 여 ${gf}${list.length - gm - gf ? ` · 성별 없음 ${list.length - gm - gf}` : ''})`),
+      h('div', { class: 'muted', style: 'margin:6px 0' }, list.slice(0, 6).map((x) => `${x.num} ${x.name}`).join(', ') + (list.length > 6 ? ' …' : '')),
+      warn.length ? h('div', { class: 'banner warn', style: 'max-height:130px;overflow:auto' }, warn.slice(0, 20).map((w) => h('div', null, w)), warn.length > 20 ? h('div', null, `…외 ${warn.length - 20}건`) : null) : null,
+      h('div', { class: 'radios', style: 'margin:10px 0' },
+        h('label', null, h('input', { type: 'radio', name: 'upm', checked: true, onchange: () => { mode.v = 'replace'; } }), '현재 명렬표를 이 내용으로 바꾸기'),
+        h('label', null, h('input', { type: 'radio', name: 'upm', onchange: () => { mode.v = 'merge'; } }), '현재 명렬표에 더하기 (번호가 같으면 덮어씀)')),
+      h('div', { class: 'muted' }, '적용 후 "저장" 버튼을 눌러야 확정돼요.'),
+      h('div', { class: 'row', style: 'margin-top:12px' }, h('button', { onclick: close }, '취소'), h('button', { class: 'primary', onclick: () => {
+        if (mode.v === 'replace') S.rosterDraft = list;
+        else { const m = new Map(S.rosterDraft.map((r) => [Number(r.num), r])); list.forEach((r) => m.set(Number(r.num), r)); S.rosterDraft = [...m.values()].sort((a, b) => Number(a.num) - Number(b.num)); }
+        S.rosterDirty = true; S.showUpload = false; close(); renderPage(); toast(`${list.length}명을 적용했어요. 저장을 눌러 확정하세요`);
+      } }, '적용'))));
+    document.body.append(ov);
+  };
+  const tplRows = () => [ROSTER_TEMPLATE_HEAD, ...Array.from({ length: 35 }, (_, i) => [i + 1])];
+  const upload = h('div', { class: 'card', hidden: !S.showUpload },
+    h('h3', null, '엑셀·CSV 파일로 일괄 등록'),
+    h('div', { class: 'muted', style: 'line-height:1.7' }, '1) 양식을 받아서 학생 정보를 채우세요.  2) 엑셀로 저장한 파일(.xlsx)이나 CSV를 올리면 한 번에 등록돼요.  성별은 "남/여", "남성/여성", "남자/여자", M/F 모두 알아봐요. 첫 줄 제목의 순서가 바뀌어도 괜찮아요.'),
+    h('div', { class: 'row gap', style: 'margin-top:10px' },
+      h('button', { class: 'sm', onclick: () => APP.xl.saveBlob(APP.xl.buildXlsx([
+        { name: '명렬표', rows: tplRows(), genderCol: 2, widths: [10, 12, 8, 16, 14, 24, 10, 12, 12, 12] },
+        { name: '작성 안내', rows: [['작성 방법'], ['출석번호와 이름은 꼭 채워 주세요. 이름이 없는 줄은 건너뜁니다.'], ['성별은 남 / 여 (남성, 여성, 남자, 여자도 인식해요).'], ['호칭: 친구들이 부르는 이름이에요. 예) 김철수 → 철수'], ['생년월일은 2015-03-02 처럼 적으면 돼요.'], ['작성한 뒤 .xlsx 로 저장해서 올려 주세요.']], widths: [70], header: true }]), '명렬표_업로드양식.xlsx') }, '양식 내려받기 (.xlsx)'),
+      DEMO ? null : h('button', { class: 'sm', onclick: async () => {
+        try { const j = await api('exportSheet', { title: '명렬표 업로드 양식', sheets: [{ name: '명렬표', rows: tplRows() }] }); upMsg.replaceChildren('양식을 만들었어요. ', h('a', { href: j.url, target: '_blank', rel: 'noopener' }, '구글 스프레드시트 열기'), ' — 작성 후 "파일 → 다운로드 → Microsoft Excel(.xlsx)"로 저장해서 올려 주세요.'); } catch (x) { toast(errMsg(x), true); }
+      } }, '구글 스프레드시트 양식 만들기'),
+      h('button', { class: 'primary sm', onclick: () => upFile.click() }, '파일 올리기'), upFile),
+    upMsg,
+    h('div', { class: 'row', style: 'margin-top:8px' }, h('button', { class: 'sm', onclick: () => { S.showUpload = false; renderPage(); } }, '닫기')));
+
   return h('div', null,
     h('div', { class: 'card' },
       h('div', { class: 'row gap' },
         h('button', { class: 'sm', onclick: () => { rows.push(blankRow((rows.reduce((m, r) => Math.max(m, Number(r.num) || 0), 0)) + 1)); S.rosterDirty = true; renderPage(); } }, '+ 학생 추가'),
         h('button', { class: 'sm', onclick: () => { S.showPaste = !S.showPaste; renderPage(); } }, '표 붙여넣기'),
+        h('button', { class: 'sm', onclick: () => { S.showUpload = !S.showUpload; renderPage(); } }, '엑셀·CSV 업로드'),
         h('span', { class: 'legend' }, h('span', null, h('i', { class: 'dot m' }), '남'), h('span', null, h('i', { class: 'dot f' }), '여')),
         h('div', { style: 'flex:1' }), dirtyEl, saveBtn),
       h('div', { class: 'table-wrap' }, table),
       h('div', { class: 'muted', style: 'margin-top:8px' }, '성별을 고르면 줄 색이 자동으로 바뀝니다. 이름 3글자 대신 "철수"처럼 부르는 이름은 "호칭"에 적어 두세요.')),
-    paste);
+    upload, paste);
 }
 
 /* ---- 비밀번호 변경 ---- */
@@ -590,7 +668,7 @@ async function kvGet(keys) {
   const o = {}; keys.forEach((k) => { o[k] = j.values[k] == null ? null : JSON.parse(j.values[k]); }); return o;
 }
 const APP = window.APP = {
-  S, h, $, api, toast, errMsg, clone, byNum, ERR, gcls,
+  S, h, $, api, toast, errMsg, clone, byNum, ERR, gcls, DEMO,
   pages: {}, onLock: [],
   renderPage: () => renderPage(),
   kvGet, kvSet: (key, obj) => api('kvSet', { key, value: JSON.stringify(obj) }),
@@ -603,6 +681,13 @@ const APP = window.APP = {
 
 /* ---------- 시작 ---------- */
 window.addEventListener('load', () => {
-  if (DEMO) startApp(); else showLogin();
+  if (DEMO) return startApp();
+  if (!CONFIGURED) {
+    $('#app').replaceChildren(h('div', { class: 'center-screen' }, h('div', { class: 'login-card' }, h('h1', null, '학급관리'),
+      h('p', null, '구글 로그인 설정이 아직 안 되어 있어요. 설정방법.md의 안내대로 config.js에 CLIENT_ID와 API_URL을 넣어 주세요.'),
+      h('a', { href: '?demo' }, '로그인 없이 체험해 보기 (데모)'))));
+    return;
+  }
+  showLogin();
 });
 })();

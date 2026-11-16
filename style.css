@@ -268,3 +268,11 @@ svg text { font-family: Pretendard, 'Pretendard Variable', -apple-system, 'Apple
 .pseat .tchip { font-size: 10px; font-weight: 700; color: #374151; padding: 0 6px; border-radius: 3px; margin-top: 2px; }
 .list-item .dot { width: 14px; height: 14px; border-radius: 3px; flex: none; border: 1px solid rgba(0,0,0,.15); }
 .list-item { display: flex; align-items: center; gap: 8px; }
+
+/* 내보내기 창 / 업로드 확인 창 */
+.modal.xdlg { max-width: 520px; max-height: 88vh; overflow: auto; }
+.xdlg input[type=checkbox], .xdlg input[type=radio] { width: auto; margin: 0; }
+.xlist { max-height: 300px; overflow: auto; border: 1px solid var(--line); border-radius: 6px; padding: 4px 10px; margin-top: 6px; }
+.xrow { display: flex; align-items: center; gap: 8px; padding: 5px 0; cursor: pointer; font-size: 14px; }
+.xall { padding-top: 2px; }
+.xgroup { margin-top: 8px; font-size: 12px; font-weight: 700; color: var(--muted, #6b7280); }

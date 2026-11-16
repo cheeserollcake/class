@@ -230,7 +230,7 @@ function view(redraw) {
     const name = await askName(SE.loadedName || defaultName()); if (!name) return;
     if (!/^[\w:.\- 가-힣]{1,60}$/.test(name)) return toast('이름에는 글자·숫자·공백·-·. 만 쓸 수 있어요', true);
     if ((SE.names || []).some((x) => x.name === name) && !confirm(`"${name}"이(가) 이미 있어요. 덮어쓸까요?`)) return;
-    try { await APP.kvSet(lk(name), { name, savedAt: Date.now(), cols: geo.cols, rows: geo.rows, gw: geo.gw, gh: geo.gh, cells: geo.cells, teams: geo.teams || [], assign: asg }); SE.loadedName = name; await loadNames(); toast(`"${name}"으로 저장했습니다`); redraw(); } catch (e) { toast(errMsg(e), true); }
+    try { await APP.kvSet(lk(name), { name, savedAt: Date.now(), cols: geo.cols, rows: geo.rows, gw: geo.gw, gh: geo.gh, cells: geo.cells, teams: geo.teams || [], colNames: cfg.colNames || [], assign: asg }); SE.loadedName = name; await loadNames(); toast(`"${name}"으로 저장했습니다`); redraw(); } catch (e) { toast(errMsg(e), true); }
   } }, '저장');
   const loadSel = h('select', { onchange: async (e) => {
     const name = e.target.value; if (!name) return;
@@ -241,11 +241,27 @@ function view(redraw) {
     if (!confirm(`저장된 "${SE.loadedName}"을(를) 삭제할까요?`)) return;
     try { await APP.kvDel(lk(SE.loadedName)); SE.loadedName = ''; await loadNames(); redraw(); } catch (e) { toast(errMsg(e), true); }
   } }, '이 저장본 삭제');
+  const exportBtn = h('button', { onclick: async () => {
+    try {
+      const names = SE.names || [], keys = names.map((x) => lk(x.name)), vals = keys.length ? await APP.kvGet(keys) : {}, roster = APP.roster(), by = rosterBy();
+      const rowsOf = (l) => {
+        const cn = (i) => (l.colNames && l.colNames[i]) || String(i + 1), rows = [['칠 판'], Array.from({ length: l.cols }, (_, c) => cn(c))];
+        for (let r = 0; r < l.rows; r++) rows.push(Array.from({ length: l.cols }, (_, c) => { const i = r * l.cols + c, n = l.assign ? l.assign[i] : null; return l.cells[i] && n != null ? (by[n] ? by[n].name : n + '번') : ''; }));
+        if ((l.teams || []).length) { rows.push([], ['모둠', '구성원']); l.teams.forEach((t) => rows.push([t.name, t.cells.map((i) => l.assign && l.assign[i] != null ? (by[l.assign[i]] ? by[l.assign[i]].name : l.assign[i] + '번') : '').filter(Boolean).join(', ')])); }
+        return rows;
+      };
+      const mk = (label, name, l, group) => { l = { ...l, colNames: l.colNames || cfg.colNames || [] }; return { id: name, label, group, name: '자리_' + name, rows: rowsOf(l), image: () => APP.exporter.seatCanvas(name, l, roster) }; };
+      const items = [];
+      if (SE.cur && SE.cur.assign) items.push(mk('지금 화면의 자리 (저장 안 한 상태)', '현재 자리', { ...SE.cur, colNames: cfg.colNames }, '현재'));
+      names.forEach((x) => { const l = vals[lk(x.name)]; if (l && l.assign) items.push(mk(x.name, x.name, l, '저장된 자리')); });
+      APP.exporter.open({ title: '자리 배치', items, empty: '저장된 자리가 아직 없어요. 자리를 섞은 뒤 "저장"을 눌러 주세요' });
+    } catch (e) { toast(errMsg(e), true); }
+  } }, '내보내기');
   const sound = h('label', { class: 'muted', style: 'display:inline-flex;gap:6px;align-items:center' }, h('input', { type: 'checkbox', checked: SE.sound, onchange: (e) => { SE.sound = e.target.checked; } }), '두근 소리');
 
   return h('div', null,
     h('div', { class: 'card' },
-      h('div', { class: 'row gap' }, shuffleBtn, skipBtn, saveBtn, loadSel, delBtn, sound),
+      h('div', { class: 'row gap' }, shuffleBtn, skipBtn, saveBtn, loadSel, delBtn, exportBtn, sound),
       h('div', { class: 'muted' }, '설정: ' + ruleText(cfg) + ' (학급 기초설정에서 바꿀 수 있어요)')),
     asg && SE.cur && SE.cur.notes && SE.cur.notes.length ? h('div', { class: 'banner warn' }, SE.cur.notes.join(' / ')) : null,
     h('div', { class: 'card' },

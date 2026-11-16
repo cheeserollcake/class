@@ -247,9 +247,33 @@ function view(redraw) {
   } }, h('option', { value: '' }, RO.sets.length ? '저장된 역할표 불러오기…' : '저장된 역할표가 없습니다'),
   RO.sets.map((n) => h('option', { value: n, selected: n === RO.setName }, n)));
 
+  const exportRoles = async () => {
+    let vals = {};
+    try { const keys = RO.sets.map(skey); if (keys.length) vals = await APP.kvGet(keys); } catch (e) { return toast(errMsg(e), true); }
+    const keep = { roles: RO.roles, setName: RO.setName, form: RO.form, pages: RO.pages, mode: RO.mode, pending: RO.pending, sel: RO.sel }; let touched = false;
+    const items = RO.sets.map((n) => {
+      const rec = vals[skey(n)]; if (!rec) return null;
+      const roles = (rec.roles || []).filter((r) => r.name || r.desc || r.owner);
+      return { id: n, label: n + (rec.form ? `  (양식: ${rec.form})` : ''), name: `역할표_${n}`, rows: [['역할명', '역할 설명', '담당자'], ...roles.map((r) => [r.name, r.desc, r.owner])],
+        image: async () => {
+          if (!rec.form) throw new Error(`"${n}" 역할표에는 연결된 양식이 없어서 이미지로 만들 수 없어요`);
+          const f = (await APP.kvGet([fkey(rec.form)]))[fkey(rec.form)]; if (!f) throw new Error(`양식 "${rec.form}"을(를) 찾지 못했어요`);
+          const fj = await APP.api('getFile', { fileId: f.fileId });
+          touched = true;
+          RO.pages = await renderFile(b64ToBytes(fj.data), fj.mime || f.mime); RO.form = f; initFont(f); RO.pending = null;
+          RO.roles = rec.roles && rec.roles.length ? rec.roles : [{ name: '', desc: '', owner: '' }]; RO.setName = n; RO.mode = 'fill'; RO.sel = null;
+          redraw(); await APP.exporter.wait(900);
+          try { await Promise.all([document.fonts.load(`${RO.form.bold ? 700 : 400} 20px "${RO.form.font}"`), document.fonts.ready]); } catch (e) { /* 기본 글꼴 */ }
+          await APP.exporter.wait(300);
+          return roleCanvases();
+        } };
+    }).filter(Boolean);
+    APP.exporter.open({ title: '역할표', items, empty: '저장된 역할표가 아직 없어요. 역할을 입력하고 "역할표 저장"을 눌러 주세요', onClose: () => { if (touched) { Object.assign(RO, keep); redraw(); } } });
+  };
   const top = h('div', { class: 'card' },
     h('div', { class: 'row gap' },
       h('button', { class: 'primary', onclick: () => fileIn.click() }, '+ 새 양식 올리기 (PDF·사진)'), fileIn, formSel,
+      h('button', { onclick: exportRoles }, '내보내기'),
       RO.form && !RO.form.draft && RO.form.name ? h('button', { class: 'sm ghost', onclick: () => {
         if (!confirm(`양식 "${RO.form.name}"을(를) 삭제할까요? (이 양식으로 저장한 역할표는 남아 있어요)`)) return;
         guard('삭제 중…', async () => { await APP.api('delFile', { fileId: RO.form.fileId }).catch(() => {}); await APP.kvDel(fkey(RO.form.name)); RO.form = null; RO.pages = null; await loadLists(); });
@@ -406,8 +430,9 @@ function refreshPicker() {
 }
 
 /* PNG 저장: 양식 이미지 위에 글자를 그려 넣기 */
-async function exportPng() {
-  const stage = document.querySelector('.rstage'); if (!stage) return;
+async function roleCanvases() {
+  const stage = document.querySelector('.rstage'); if (!stage) return [];
+  const outs = [];
   try { await Promise.all([document.fonts.load(`${RO.form.bold ? 700 : 400} 20px "${RO.form.font}"`), document.fonts.load('400 20px Pretendard')]); } catch (e) { /* 글꼴 없으면 기본 글꼴 */ }
   RO.pages.forEach((p, pi) => {
     const out = document.createElement('canvas'); out.width = p.canvas.width; out.height = p.canvas.height;
@@ -433,7 +458,12 @@ async function exportPng() {
       const lh = fs * 1.2, top = y + (hh - lines.length * lh) / 2;
       lines.forEach((l, i) => ctx.fillText(l, x + w / 2, top + (i + 0.5) * lh));
     });
-    const a = document.createElement('a'); a.download = `역할표${RO.pages.length > 1 ? '_' + (pi + 1) : ''}.png`; a.href = out.toDataURL('image/png'); a.click();
+    outs.push(out);
   });
+  return outs;
+}
+async function exportPng() {
+  const outs = await roleCanvases();
+  for (let i = 0; i < outs.length; i++) { await APP.exporter.saveCanvas(outs[i], `역할표${outs.length > 1 ? '_' + (i + 1) : ''}.png`); await APP.exporter.wait(250); }
 }
 })();
