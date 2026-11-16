@@ -3,7 +3,6 @@
 'use strict';
 const CFG = window.APP_CONFIG || {};
 const DEMO = new URLSearchParams(location.search).has('demo');   // 주소 뒤에 ?demo 를 붙였을 때만 체험(데모) 모드
-const CONFIGURED = !!(CFG.CLIENT_ID && CFG.API_URL);
 const $ = (s, el = document) => el.querySelector(s);
 const clone = (o) => JSON.parse(JSON.stringify(o));
 
@@ -31,7 +30,17 @@ function toast(msg, isErr) {
 }
 const ERR = {
   AUTH: '로그인이 만료되었습니다. 다시 로그인해 주세요.',
-  FORBIDDEN: '이 계정은 사용할 수 없습니다. 시트를 만든 구글 계정으로 로그인하세요.',
+  FORBIDDEN: '이 계정은 사용할 수 없습니다.',
+  NOCONFIG: '구글 로그인 설정(클라이언트 ID)이 아직 없어요.',
+  GIS: '구글 로그인 도구를 불러오지 못했어요. 인터넷 연결을 확인해 주세요.',
+  NOSCOPE: '구글 드라이브 접근을 허용해야 저장할 수 있어요. 로그인 창에서 모든 항목을 체크해 주세요.',
+  popup_closed: '로그인 창이 닫혔어요. 다시 눌러 주세요.',
+  popup_failed_to_open: '팝업이 막혔어요. 주소창 옆 팝업 차단을 풀고 다시 눌러 주세요.',
+  access_denied: '로그인이 허용되지 않았어요. (구글 클라우드의 "테스트 사용자"에 이 계정이 없을 수 있어요)',
+  APIOFF: '구글 클라우드에서 "Google Sheets API"와 "Google Drive API"를 사용 설정해 주세요. (설정방법.md 1단계)',
+  NOTFOUND: '구글 드라이브에서 파일을 찾지 못했어요.',
+  DENIED: '구글이 접근을 허용하지 않았어요. 다시 로그인해 보세요.',
+  TOOBIG: '파일이나 내용이 너무 커서 저장할 수 없어요.',
   PW: '비밀번호가 맞지 않습니다.',
   LOCKED: '5번 틀려서 5분간 잠겼습니다. 잠시 후 다시 시도하세요.',
   SHORT: '비밀번호는 6자 이상이어야 합니다.',
@@ -64,11 +73,8 @@ let loginResolve = null;
 async function api(action, data = {}) {
   if (DEMO) return demoApi(action, { pw: S.pw, ...data });
   for (let i = 0; i < 2; i++) {
-    const res = await fetch(CFG.API_URL, { method: 'POST', body: JSON.stringify({ action, token: S.token, pw: S.pw, ...data }) });
-    const j = await res.json();
-    if (j.error === 'AUTH') { await relogin(); continue; }
-    if (!j.ok) throw new Error(j.error || 'UNKNOWN');
-    return j;
+    try { return await APP.google.api(action, { pw: S.pw, ...data }); }
+    catch (e) { if (e.message === 'AUTH' && i === 0) { await relogin(); continue; } throw e; }
   }
   throw new Error('AUTH');
 }
@@ -109,49 +115,64 @@ function demoRoster() {
   return names.map((n, i) => ({ num: i + 1, name: n, gender: i % 2 ? '여' : '남', phone: '', birth: '', note: '', title: n.slice(1), b1: '', b2: '', b3: '' }));
 }
 
-/* ---------- 로그인 ---------- */
-function waitGoogle(cb) {
-  if (window.google && google.accounts && google.accounts.id) return cb();
-  setTimeout(() => waitGoogle(cb), 150);
-}
-function onCredential(resp) {
-  S.token = resp.credential;
-  if (loginResolve) { const r = loginResolve; loginResolve = null; const o = $('#relogin'); if (o) o.remove(); r(); }
-  else startApp();
-}
-let gsiReady = false;
-function initGsi() {
-  if (gsiReady) return;
-  google.accounts.id.initialize({ client_id: CFG.CLIENT_ID, callback: onCredential, auto_select: false });
-  gsiReady = true;
-}
-function loginCard(note) {
-  const card = h('div', { class: 'login-card' },
-    h('h1', null, '학급관리'),
-    h('p', null, note || '구글 계정으로 로그인해 주세요.'),
-    h('div', { class: 'gbtn', id: 'gbtn' }));
-  return card;
-}
-function showLogin(errText) {
+/* ---------- 로그인 (구글 계정) ---------- */
+function showLogin(msg) {
   const root = $('#app'); root.replaceChildren();
-  const card = loginCard();
-  if (errText) card.append(h('div', { class: 'err' }, errText));
-  root.append(h('div', { class: 'center-screen' }, card));
-  waitGoogle(() => { initGsi(); google.accounts.id.renderButton($('#gbtn'), { theme: 'outline', size: 'large', text: 'signin_with', locale: 'ko' }); });
+  const err = h('div', { class: 'err', style: 'min-height:20px;margin-top:10px' }, msg || '');
+  const idIn = h('input', { placeholder: '클라이언트 ID  (…apps.googleusercontent.com)', style: 'width:100%;margin:8px 0' });
+  const setup = h('div', { class: 'login-setup', hidden: true },
+    h('div', { style: 'font-weight:700;margin-bottom:4px' }, '구글 로그인 설정이 아직 안 되어 있어요'),
+    h('div', { class: 'muted', style: 'line-height:1.6' }, '설정방법.md 1단계에서 만든 "클라이언트 ID"를 아래에 붙여넣으면 바로 로그인할 수 있어요. (이 기기·브라우저에만 저장돼요. 모든 기기에서 쓰려면 config.js에 넣어 주세요.)'),
+    idIn, h('button', { class: 'primary', onclick: () => { if (!/\.apps\.googleusercontent\.com$/.test(idIn.value.trim())) { err.textContent = '클라이언트 ID가 올바르지 않아요. ".apps.googleusercontent.com"으로 끝나야 해요.'; return; } APP.google.setClientId(idIn.value); setup.hidden = true; doLogin(); } }, '저장하고 로그인'));
+  const loginBtn = h('button', { class: 'primary big', onclick: () => doLogin() }, '구글 계정으로 로그인하기');
+  const demoBtn = h('button', { class: 'big', onclick: () => { location.href = location.pathname + '?demo'; } }, '로그인 없이 데모 체험하기');
+  async function doLogin() {
+    err.textContent = '';
+    if (!APP.google.clientId()) { setup.hidden = false; return; }
+    loginBtn.disabled = true; loginBtn.textContent = '로그인 중…';
+    try { await APP.google.login(); S.token = 'ok'; startApp(); return; }
+    catch (e) { err.textContent = errMsg(e); }
+    loginBtn.disabled = false; loginBtn.textContent = '구글 계정으로 로그인하기';
+  }
+  root.append(h('div', { class: 'center-screen' }, h('div', { class: 'login-card' },
+    h('h1', null, '학급관리'),
+    h('p', null, '로그인한 구글 계정의 드라이브에 학급 정보가 저장돼요.'),
+    h('div', { class: 'login-btns' }, loginBtn, demoBtn),
+    err, setup,
+    h('div', { class: 'muted', style: 'margin-top:14px;font-size:12px;line-height:1.6' }, '데모는 연습용이에요. 이 브라우저에만 임시로 저장되고 구글 계정과는 연결되지 않아요.'))));
 }
 function relogin() {
   return new Promise((res) => {
-    loginResolve = res;
-    const card = loginCard('로그인이 만료되었습니다. 다시 로그인하면 작업이 이어집니다.');
-    document.body.append(h('div', { class: 'overlay', id: 'relogin' }, h('div', { class: 'login-card' }, ...card.childNodes)));
-    waitGoogle(() => { initGsi(); google.accounts.id.renderButton($('#relogin #gbtn'), { theme: 'outline', size: 'large', locale: 'ko' }); });
+    const err = h('div', { class: 'err', style: 'min-height:20px;margin-top:8px' });
+    const btn = h('button', { class: 'primary big', onclick: async () => {
+      btn.disabled = true; err.textContent = '';
+      try { const r = await APP.google.login({ prompt: '', hint: S.email }); if (r.changed) return location.reload(); ov.remove(); res(); }
+      catch (e) { err.textContent = errMsg(e); btn.disabled = false; }
+    } }, '다시 로그인');
+    const ov = h('div', { class: 'overlay', id: 'relogin' }, h('div', { class: 'login-card' }, h('h1', null, '학급관리'), h('p', null, '로그인 시간이 지났어요. 다시 로그인하면 하던 작업이 이어져요.'), btn, err));
+    document.body.append(ov);
   });
+}
+
+/* 예전에 데모 모드로 저장해 둔 내용을 내 계정으로 가져오기 */
+async function maybeImportDemo(j) {
+  const raw = localStorage.getItem('demo_db'), flag = 'demo_import_' + j.email;
+  if (!raw || localStorage.getItem(flag)) return false;
+  let db; try { db = JSON.parse(raw); } catch (e) { return false; }
+  const sample = new Set(demoRoster().map((x) => x.name));
+  const meaningful = (db.roster || []).some((r) => !sample.has(r.name)) || Object.keys(db.kv || {}).length || (db.logs || []).length || (db.boards || []).length;
+  if (!meaningful || (j.roster || []).length || (j.boards || []).length) return false;
+  if (!confirm('이 브라우저에 데모 모드로 저장해 둔 학급 정보가 있어요.\n내 구글 계정으로 가져올까요?\n(데모에 있던 내용은 그대로 남아요)')) { localStorage.setItem(flag, 'no'); return false; }
+  $('#app').replaceChildren(h('div', { class: 'center-screen' }, h('div', { class: 'muted' }, '데모 내용을 내 계정으로 옮기는 중… (잠시만 기다려 주세요)')));
+  try { await APP.google.importDemo(db); localStorage.setItem(flag, 'yes'); return true; }
+  catch (e) { toast(errMsg(e), true); return false; }
 }
 
 async function startApp() {
   const root = $('#app'); root.replaceChildren(h('div', { class: 'center-screen' }, h('div', { class: 'muted' }, '불러오는 중…')));
   try {
     const j = await api('load');
+    if (!DEMO && await maybeImportDemo(j)) return startApp();
     S.email = j.email; S.roster = j.roster || []; S.seat = normSeat(j.seat); S.boards = j.boards || []; S.defaultPw = j.defaultPw;
     if (!S.curBoard && S.boards.length) S.curBoard = S.boards[0].id;
     renderShell();
@@ -199,10 +220,7 @@ function lock() {
   if (TABS.find((x) => x.id === S.tab).pw) S.tab = 'submit';
   renderShell();
 }
-function logout() {
-  if (window.google && google.accounts) google.accounts.id.disableAutoSelect();
-  S.token = null; location.reload();
-}
+function logout() { S.token = null; location.reload(); }
 function askPw(onOk) {
   const err = h('div', { class: 'err' });
   const input = h('input', { type: 'password', placeholder: '비밀번호', autocomplete: 'off' });
@@ -680,14 +698,5 @@ const APP = window.APP = {
 };
 
 /* ---------- 시작 ---------- */
-window.addEventListener('load', () => {
-  if (DEMO) return startApp();
-  if (!CONFIGURED) {
-    $('#app').replaceChildren(h('div', { class: 'center-screen' }, h('div', { class: 'login-card' }, h('h1', null, '학급관리'),
-      h('p', null, '구글 로그인 설정이 아직 안 되어 있어요. 설정방법.md의 안내대로 config.js에 CLIENT_ID와 API_URL을 넣어 주세요.'),
-      h('a', { href: '?demo' }, '로그인 없이 체험해 보기 (데모)'))));
-    return;
-  }
-  showLogin();
-});
+window.addEventListener('load', () => { if (DEMO) startApp(); else showLogin(); });
 })();

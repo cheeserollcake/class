@@ -276,3 +276,8 @@ svg text { font-family: Pretendard, 'Pretendard Variable', -apple-system, 'Apple
 .xrow { display: flex; align-items: center; gap: 8px; padding: 5px 0; cursor: pointer; font-size: 14px; }
 .xall { padding-top: 2px; }
 .xgroup { margin-top: 8px; font-size: 12px; font-weight: 700; color: var(--muted, #6b7280); }
+
+/* 첫 화면 */
+.login-btns { display: flex; flex-direction: column; gap: 10px; margin-top: 18px; }
+.login-btns button.big { width: 100%; padding: 14px 16px; font-size: 16px; }
+.login-setup { margin-top: 16px; padding: 14px; border: 1px solid var(--line); border-radius: 8px; text-align: left; background: #f8f9fb; }
