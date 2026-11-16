@@ -139,7 +139,8 @@ function showLogin(msg) {
     h('p', null, '로그인한 구글 계정의 드라이브에 학급 정보가 저장돼요.'),
     h('div', { class: 'login-btns' }, loginBtn, demoBtn),
     err, setup,
-    h('div', { class: 'muted', style: 'margin-top:14px;font-size:12px;line-height:1.6' }, '데모는 연습용이에요. 이 브라우저에만 임시로 저장되고 구글 계정과는 연결되지 않아요.'))));
+    h('div', { class: 'muted', style: 'margin-top:14px;font-size:12px;line-height:1.6' }, '데모는 연습용이에요. 이 브라우저에만 임시로 저장되고 구글 계정과는 연결되지 않아요.'),
+    h('div', { class: 'login-links' }, h('a', { href: 'about.html' }, '앱 소개'), h('a', { href: 'privacy.html' }, '개인정보처리방침'), h('a', { href: 'terms.html' }, '이용약관')))));
 }
 function relogin() {
   return new Promise((res) => {
