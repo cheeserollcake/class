@@ -28,29 +28,44 @@ function groupsOf(geo, asg) {
   asg.forEach((n, i) => { if (n == null || !geo.cells[i]) return; const k = groupOf(geo, i); if (!g.has(k)) g.set(k, []); g.get(k).push(n); });
   return g;
 }
+const TEAM_COLORS = ['#fde68a', '#a7f3d0', '#fbcfe8', '#bfdbfe', '#fed7aa', '#ddd6fe', '#fecaca', '#99f6e4', '#d9f99d', '#e9d5ff'];
 const pairKey = (a, b) => (a < b ? a + '-' + b : b + '-' + a);
+function teamMap(geo) { if (geo._tm) return geo._tm; const m = new Map(); (geo.teams || []).forEach((t, ti) => t.cells.forEach((i) => m.set(i, ti))); Object.defineProperty(geo, '_tm', { value: m, enumerable: false, writable: true }); return m; }
+function teamGroups(geo, asg) {
+  const g = (geo.teams || []).map(() => []), tm = teamMap(geo);
+  asg.forEach((n, i) => { if (n == null || !geo.cells[i]) return; const t = tm.get(i); if (t != null) g[t].push(n); });
+  return g;
+}
 
 function costOf(geo, cfg, asg, gender, hist) {
-  let cost = 0; const info = { avoid: [], repeat: 0 };
+  let cost = 0; const info = { avoid: [], repeat: 0, skew: [] };
   const groups = groupsOf(geo, asg), pos = new Map();
   asg.forEach((n, i) => { if (n != null) pos.set(n, i); });
   const males = [...pos.keys()].filter((n) => gender[n] === '남').length, females = [...pos.keys()].filter((n) => gender[n] === '여').length;
   const ratio = males + females ? males / (males + females) : 0.5;
+  const pairs = new Set();
   groups.forEach((mem) => {
     for (let i = 0; i < mem.length; i++) for (let j = i + 1; j < mem.length; j++) {
       const ga = gender[mem[i]], gb = gender[mem[j]];
       if (cfg.mode === 'mixed' && ga && gb && ga === gb) cost += 3;
       if (cfg.mode === 'same' && ga && gb && ga !== gb) cost += 3;
-      if (hist.has(pairKey(mem[i], mem[j]))) { cost += 6; info.repeat++; }
-    }
-    if (cfg.mode === 'balanced') {
-      const known = mem.filter((n) => gender[n]), m = known.filter((n) => gender[n] === '남').length;
-      const dev = Math.abs(m - known.length * ratio); cost += Math.pow(Math.max(0, dev - 0.5), 2) * 4;
+      pairs.add(pairKey(mem[i], mem[j]));
     }
   });
+  teamGroups(geo, asg).forEach((mem, ti) => {
+    mem.teamName = (geo.teams[ti] || {}).name;
+    for (let i = 0; i < mem.length; i++) for (let j = i + 1; j < mem.length; j++) pairs.add(pairKey(mem[i], mem[j]));
+    if (cfg.teamBalance) {
+      const known = mem.filter((n) => gender[n]), m = known.filter((n) => gender[n] === '남').length;
+      const dev = Math.max(0, Math.abs(m - known.length * ratio) - 0.5); cost += dev * 4;
+      if (known.length > 1 && Math.abs(m - (known.length - m)) >= 2) info.skew.push({ name: mem.teamName, m, f: known.length - m });
+    }
+  });
+  pairs.forEach((k) => { if (hist.has(k)) { cost += 6; info.repeat++; } });
   (cfg.avoid || []).forEach((r) => {
     const a = pos.get(r.a), b = pos.get(r.b); if (a == null || b == null) return;
-    const bad = r.type === 'group' ? groupOf(geo, a) === groupOf(geo, b)
+    const tm = teamMap(geo), ta = tm.get(a), tb = tm.get(b);
+    const bad = r.type === 'group' ? (groupOf(geo, a) === groupOf(geo, b) || (ta != null && ta === tb))
       : Math.max(Math.abs(Math.floor(a / geo.cols) - Math.floor(b / geo.cols)), Math.abs((a % geo.cols) - (b % geo.cols))) <= r.n;
     if (bad) { cost += 50; info.avoid.push(`${nameOf(r.a)}↔${nameOf(r.b)}`); }
   });
@@ -58,7 +73,7 @@ function costOf(geo, cfg, asg, gender, hist) {
 }
 
 function arrange(cfg, hist) {
-  const geo = { cols: cfg.cols, rows: cfg.rows, gw: cfg.gw, gh: cfg.gh, cells: cfg.cells.slice() };
+  const geo = { cols: cfg.cols, rows: cfg.rows, gw: cfg.gw, gh: cfg.gh, cells: cfg.cells.slice(), teams: (cfg.teams || []).map((t) => ({ name: t.name, cells: t.cells.slice() })) };
   const roster = APP.roster(), gender = {}; roster.forEach((s) => { gender[s.num] = s.gender; });
   const active = []; geo.cells.forEach((on, i) => on && active.push(i));
   const asg = new Array(geo.cells.length).fill(null);
@@ -84,6 +99,7 @@ function arrange(cfg, hist) {
   }
   const notes = [];
   if (cur.info.avoid.length) notes.push('기피 설정을 지키지 못한 학생: ' + cur.info.avoid.join(', '));
+  if (cur.info.skew.length) notes.push('남녀 비율이 많이 치우친 모둠: ' + cur.info.skew.map((x) => `${x.name} (남${x.m}:여${x.f})`).join(', '));
   if (cur.info.repeat) notes.push(`최근에 같은 짝·모둠이 된 조합이 ${cur.info.repeat}쌍 있어요`);
   return { geo, asg, notes };
 }
@@ -98,7 +114,7 @@ async function recentPairs(n) {
   const keys = SE.names.slice(0, n).map((x) => lk(x.name));
   if (!keys.length) return set;
   const vals = await APP.kvGet(keys);
-  keys.forEach((k) => { const l = vals[k]; if (!l) return; groupsOf(l, l.assign).forEach((mem) => { for (let i = 0; i < mem.length; i++) for (let j = i + 1; j < mem.length; j++) set.add(pairKey(mem[i], mem[j])); }); });
+  keys.forEach((k) => { const l = vals[k]; if (!l) return; [...groupsOf(l, l.assign).values(), ...teamGroups(l, l.assign)].forEach((mem) => { for (let i = 0; i < mem.length; i++) for (let j = i + 1; j < mem.length; j++) set.add(pairKey(mem[i], mem[j])); }); });
   return set;
 }
 function askName(def) {
@@ -130,13 +146,15 @@ APP.pages.seat = () => {
 
 function ruleText(c) {
   const g = c.gw === 1 && c.gh === 1 ? '개별' : c.gw === 2 && c.gh === 1 ? '짝' : `${c.gw}×${c.gh} 묶음`;
-  const m = { mixed: '짝은 남녀로', same: '짝은 남남·여여', balanced: '모둠 남녀 동비율', random: '무작위' }[c.mode];
-  return `${c.cols}×${c.rows} · ${g} · ${m} · 고정 ${c.fixed.length} · 기피 ${c.avoid.length} · 반복 방지 ${c.noRepeat}회`;
+  const m = { mixed: '짝은 남녀로', same: '짝은 동성으로', random: '짝 성별 무관' }[c.mode] || '짝은 남녀로';
+  const tm = (c.teams || []).length ? `모둠 ${c.teams.length}개${c.teamBalance ? '(남녀 비율 맞춤)' : ''} · ` : '';
+  return `${c.cols}×${c.rows} · ${g} · ${m} · ${tm} 고정 ${c.fixed.length} · 기피 ${c.avoid.length} · 반복 방지 ${c.noRepeat}회`;
 }
 
 function view(redraw) {
   const cfg = S.seat;
-  const geo = SE.cur || { cols: cfg.cols, rows: cfg.rows, gw: cfg.gw, gh: cfg.gh, cells: cfg.cells, assign: null };
+  const geo = SE.cur || { cols: cfg.cols, rows: cfg.rows, gw: cfg.gw, gh: cfg.gh, cells: cfg.cells, teams: cfg.teams || [], assign: null };
+  const tmap = teamMap(geo);
   const asg = SE.cur ? SE.cur.assign : null;
   const banner = h('div', { class: 'drum', hidden: true });
   const grid = h('div', { class: 'pgrid', style: `grid-template-columns:repeat(${geo.cols},1fr)` });
@@ -145,7 +163,8 @@ function view(redraw) {
   const paint = (c, n, extra) => {
     const s = n != null ? by[n] : null;
     c.el.className = 'pseat ' + (geo.cells[c.idx] ? 'on ' + (((Math.floor(c.idx / geo.cols / geo.gh) + Math.floor((c.idx % geo.cols) / geo.gw)) % 2) ? 'gb' : 'ga') : 'off') + (s ? ' ' + APP.gcls(s.gender) : '') + (extra ? ' ' + extra : '');
-    c.el.replaceChildren(...(n != null ? [h('span', { class: 'pno' }, n), h('span', { class: 'pnm' }, s ? s.name : n + '번')] : []));
+    const ti = tmap.get(c.idx);
+    c.el.replaceChildren(...(n != null ? [h('span', { class: 'pno' }, n), h('span', { class: 'pnm' }, s ? s.name : n + '번'), ti != null ? h('span', { class: 'tchip', style: `background:${TEAM_COLORS[ti % TEAM_COLORS.length]}` }, geo.teams[ti].name) : null].filter(Boolean) : []));
     if (!geo.cells[c.idx]) c.el.textContent = '';
   };
   geo.cells.forEach((on, i) => {
@@ -202,7 +221,7 @@ function view(redraw) {
       const res = arrange(cfg, hist);
       if (res.error) { shuffleBtn.disabled = false; return toast(res.error, true); }
       SE.sel = null; SE.loadedName = '';
-      animate(res, () => { SE.cur = { ...res.geo, assign: res.asg, notes: res.notes }; redraw(); });
+      animate(res, () => { SE.cur = { ...res.geo, teams: res.geo.teams, assign: res.asg, notes: res.notes }; redraw(); });
       skipBtn.hidden = false;
     } catch (e) { shuffleBtn.disabled = false; toast(errMsg(e), true); }
   } }, SE.cur ? '다시 섞기' : '자리 섞기');
@@ -211,12 +230,12 @@ function view(redraw) {
     const name = await askName(SE.loadedName || defaultName()); if (!name) return;
     if (!/^[\w:.\- 가-힣]{1,60}$/.test(name)) return toast('이름에는 글자·숫자·공백·-·. 만 쓸 수 있어요', true);
     if ((SE.names || []).some((x) => x.name === name) && !confirm(`"${name}"이(가) 이미 있어요. 덮어쓸까요?`)) return;
-    try { await APP.kvSet(lk(name), { name, savedAt: Date.now(), cols: geo.cols, rows: geo.rows, gw: geo.gw, gh: geo.gh, cells: geo.cells, assign: asg }); SE.loadedName = name; await loadNames(); toast(`"${name}"으로 저장했습니다`); redraw(); } catch (e) { toast(errMsg(e), true); }
+    try { await APP.kvSet(lk(name), { name, savedAt: Date.now(), cols: geo.cols, rows: geo.rows, gw: geo.gw, gh: geo.gh, cells: geo.cells, teams: geo.teams || [], assign: asg }); SE.loadedName = name; await loadNames(); toast(`"${name}"으로 저장했습니다`); redraw(); } catch (e) { toast(errMsg(e), true); }
   } }, '저장');
   const loadSel = h('select', { onchange: async (e) => {
     const name = e.target.value; if (!name) return;
     try { const j = await APP.kvGet([lk(name)]); const l = j[lk(name)]; if (!l) return toast('불러오지 못했어요', true);
-      SE.cur = { cols: l.cols, rows: l.rows, gw: l.gw, gh: l.gh, cells: l.cells, assign: l.assign, notes: [] }; SE.loadedName = name; SE.sel = null; redraw(); } catch (x) { toast(errMsg(x), true); }
+      SE.cur = { cols: l.cols, rows: l.rows, gw: l.gw, gh: l.gh, cells: l.cells, teams: l.teams || [], assign: l.assign, notes: [] }; SE.loadedName = name; SE.sel = null; redraw(); } catch (x) { toast(errMsg(x), true); }
   } }, h('option', { value: '' }, SE.names.length ? '저장된 자리 불러오기…' : '저장된 자리가 없습니다'), SE.names.map((x) => h('option', { value: x.name, selected: x.name === SE.loadedName }, x.name)));
   const delBtn = h('button', { class: 'ghost', hidden: !SE.loadedName, onclick: async () => {
     if (!confirm(`저장된 "${SE.loadedName}"을(를) 삭제할까요?`)) return;

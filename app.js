@@ -39,7 +39,8 @@ const ERR = {
 const errMsg = (e) => ERR[e.message] || ('오류: ' + e.message);
 
 /* ---------- 상태 ---------- */
-const defaultSeat = () => ({ cols: 6, rows: 5, cells: Array(30).fill(1), gw: 2, gh: 1, colNames: [], mode: 'mixed', fixed: [], avoid: [], noRepeat: 0 });
+const defaultSeat = () => ({ cols: 6, rows: 5, cells: Array(30).fill(1), gw: 2, gh: 1, colNames: [], mode: 'mixed', teams: [], teamBalance: false, fixed: [], avoid: [], noRepeat: 0 });
+const normSeat = (x) => { const o = Object.assign(defaultSeat(), x || {}); if (o.mode === 'balanced') { o.mode = 'mixed'; o.teamBalance = true; } if (!['mixed', 'same', 'random'].includes(o.mode)) o.mode = 'mixed'; if (!Array.isArray(o.teams)) o.teams = []; return o; };
 const S = {
   token: null, email: '', unlocked: false, pw: '', defaultPw: true,
   roster: [], seat: defaultSeat(), boards: [],
@@ -150,7 +151,7 @@ async function startApp() {
   const root = $('#app'); root.replaceChildren(h('div', { class: 'center-screen' }, h('div', { class: 'muted' }, '불러오는 중…')));
   try {
     const j = await api('load');
-    S.email = j.email; S.roster = j.roster || []; S.seat = Object.assign(defaultSeat(), j.seat || {}); S.boards = j.boards || []; S.defaultPw = j.defaultPw;
+    S.email = j.email; S.roster = j.roster || []; S.seat = normSeat(j.seat); S.boards = j.boards || []; S.defaultPw = j.defaultPw;
     if (!S.curBoard && S.boards.length) S.curBoard = S.boards[0].id;
     renderShell();
   } catch (e) {
@@ -333,7 +334,18 @@ function pwEditor() {
 }
 
 /* ---- 자리 배치 설정 ---- */
-const MODES = [['mixed', '짝은 남녀로'], ['same', '짝은 남남·여여로'], ['balanced', '모둠에 남녀 최대한 같은 비율로'], ['random', '무작위']];
+const MODES = [['mixed', '짝은 남녀로'], ['same', '짝은 동성으로'], ['random', '짝 성별 상관 없음']];
+const TEAM_COLORS = ['#fde68a', '#a7f3d0', '#fbcfe8', '#bfdbfe', '#fed7aa', '#ddd6fe', '#fecaca', '#99f6e4', '#d9f99d', '#e9d5ff'];
+function promptTeamName(def) {
+  return new Promise((resolve) => {
+    const input = h('input', { value: def, maxlength: 12, style: 'width:100%;margin:12px 0 8px' });
+    const close = (v) => { ov.remove(); resolve(v); };
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') close(input.value.trim()); if (e.key === 'Escape') close(null); });
+    const ov = h('div', { class: 'overlay' }, h('div', { class: 'modal' }, h('h3', null, '모둠 이름'), h('div', { class: 'muted' }, '이미 있는 이름이면 그 모둠에 자리가 더해져요'), input,
+      h('div', { class: 'row' }, h('button', { onclick: () => close(null) }, '취소'), h('button', { class: 'primary', onclick: () => close(input.value.trim()) }, '확인'))));
+    document.body.append(ov); input.focus(); input.select();
+  });
+}
 function seatEditor() {
   if (!S.seatDraft) { S.seatDraft = clone(S.seat); S.seatUi = { editMode: 'move', sel: null, pick: null }; }
   const d = S.seatDraft, ui = S.seatUi;
@@ -344,6 +356,20 @@ function seatEditor() {
   const swap = (a, b) => {
     [d.cells[a], d.cells[b]] = [d.cells[b], d.cells[a]];
     d.fixed.forEach((f) => { if (f.idx === a) f.idx = b; else if (f.idx === b) f.idx = a; });
+    d.teams.forEach((t) => { t.cells = t.cells.map((i) => (i === a ? b : i === b ? a : i)); });
+  };
+  if (!ui.teamSel) ui.teamSel = [];
+  if (!Array.isArray(d.teams)) d.teams = [];
+  const dropFromTeams = (idxs) => { d.teams.forEach((t) => { t.cells = t.cells.filter((i) => !idxs.includes(i)); }); d.teams = d.teams.filter((t) => t.cells.length); };
+  const teamOf = new Map(); d.teams.forEach((t, ti) => t.cells.forEach((i) => teamOf.set(i, ti)));
+  const nextTeamName = () => { let n = 1; while (d.teams.some((t) => t.name === n + '모둠')) n++; return n + '모둠'; };
+  const makeTeam = async () => {
+    if (!ui.teamSel.length) return toast('먼저 모둠으로 묶을 자리를 눌러 선택하세요', true);
+    const name = await promptTeamName(nextTeamName()); if (!name) return;
+    const sel = ui.teamSel.slice(); dropFromTeams(sel);
+    const ex = d.teams.find((t) => t.name === name);
+    if (ex) ex.cells.push(...sel); else d.teams.push({ name, cells: sel });
+    ui.teamSel = []; rerender();
   };
   const onCell = (i) => {
     if (ui.pick != null) {
@@ -353,7 +379,10 @@ function seatEditor() {
     }
     if (ui.editMode === 'toggle') {
       d.cells[i] = d.cells[i] ? 0 : 1;
-      if (!d.cells[i]) d.fixed = d.fixed.filter((f) => f.idx !== i);
+      if (!d.cells[i]) { d.fixed = d.fixed.filter((f) => f.idx !== i); dropFromTeams([i]); }
+    } else if (ui.editMode === 'team') {
+      if (!d.cells[i]) return toast('사용하지 않는 자리입니다', true);
+      const k = ui.teamSel.indexOf(i); if (k >= 0) ui.teamSel.splice(k, 1); else ui.teamSel.push(i);
     } else if (ui.sel == null) ui.sel = i;
     else if (ui.sel === i) ui.sel = null;
     else { swap(ui.sel, i); ui.sel = null; }
@@ -364,6 +393,7 @@ function seatEditor() {
     const nc = Array(cols * rows).fill(1), map = (i) => { const r = Math.floor(i / d.cols), c = i % d.cols; return r < rows && c < cols ? r * cols + c : -1; };
     d.cells.forEach((v, i) => { const j = map(i); if (j >= 0) nc[j] = v; });
     d.fixed = d.fixed.map((f) => ({ ...f, idx: map(f.idx) })).filter((f) => f.idx >= 0 && nc[f.idx]);
+    d.teams = d.teams.map((t) => ({ ...t, cells: t.cells.map(map).filter((i) => i >= 0 && nc[i]) })).filter((t) => t.cells.length); ui.teamSel = [];
     d.cells = nc; d.cols = cols; d.rows = rows; ui.sel = null; rerender();
   };
 
@@ -372,8 +402,9 @@ function seatEditor() {
       const r = Math.floor(i / d.cols), c = i % d.cols;
       const gi = (Math.floor(c / d.gw) + Math.floor(r / d.gh)) % 2;
       const fx = d.fixed.find((f) => f.idx === i);
-      return h('div', { class: `seat ${on ? 'on ' + (gi ? 'gb' : 'ga') : 'off'}${ui.sel === i ? ' sel' : ''}${ui.pick != null && on ? ' pickable' : ''}`, onclick: () => onCell(i) },
-        on ? (fx ? h('span', { class: 'fixed-mark' }, '고정 ', stuName(fx.num)) : String(i + 1)) : '사용 안 함');
+      const ti = teamOf.get(i), tsel = ui.teamSel.includes(i);
+      return h('div', { class: `seat ${on ? 'on ' + (gi ? 'gb' : 'ga') : 'off'}${ui.sel === i || tsel ? ' sel' : ''}${ui.pick != null && on ? ' pickable' : ''}`, style: on && ti != null ? `background:${TEAM_COLORS[ti % TEAM_COLORS.length]}` : null, onclick: () => onCell(i) },
+        on ? [fx ? h('span', { class: 'fixed-mark' }, '고정 ', stuName(fx.num)) : h('span', null, String(i + 1)), ti != null ? h('span', { class: 'tname' }, d.teams[ti].name) : null] : '사용 안 함');
     }));
 
   const sizeIn = (val, onch) => h('input', { class: 'n', type: 'number', min: 1, max: 12, value: val, onchange: onch });
@@ -397,7 +428,12 @@ function seatEditor() {
     active < S.roster.length ? h('div', { class: 'banner warn' }, '사용 자리가 학생 수보다 적습니다.') : null,
     h('div', { class: 'row gap radios' },
       h('label', null, h('input', { type: 'radio', name: 'em', checked: ui.editMode === 'move', onchange: () => { ui.editMode = 'move'; ui.sel = null; rerender(); } }), '자리 이동 (두 자리를 차례로 누르면 서로 바뀜)'),
-      h('label', null, h('input', { type: 'radio', name: 'em', checked: ui.editMode === 'toggle', onchange: () => { ui.editMode = 'toggle'; ui.sel = null; rerender(); } }), '사용 안 함 켜고 끄기')),
+      h('label', null, h('input', { type: 'radio', name: 'em', checked: ui.editMode === 'toggle', onchange: () => { ui.editMode = 'toggle'; ui.sel = null; rerender(); } }), '사용 안 함 켜고 끄기'),
+      h('label', null, h('input', { type: 'radio', name: 'em', checked: ui.editMode === 'team', onchange: () => { ui.editMode = 'team'; ui.sel = null; rerender(); } }), '모둠 지정 (여러 자리를 누른 뒤 "모둠 만들기")')),
+    ui.editMode === 'team' ? h('div', { class: 'banner' }, h('div', { class: 'row' }, h('span', null, `선택한 자리 ${ui.teamSel.length}개`),
+      h('button', { class: 'sm primary', onclick: makeTeam }, '모둠 만들기'),
+      h('button', { class: 'sm', onclick: () => { if (!ui.teamSel.length) return; dropFromTeams(ui.teamSel); ui.teamSel = []; rerender(); } }, '모둠에서 빼기'),
+      h('button', { class: 'sm ghost', onclick: () => { ui.teamSel = []; rerender(); } }, '선택 해제'))) : null,
     ui.pick != null ? h('div', { class: 'banner' }, `${stuName(ui.pick)} 학생의 고정 자리를 그림에서 눌러 주세요. `, h('button', { class: 'sm', onclick: () => { ui.pick = null; rerender(); } }, '취소')) : null,
     h('div', { class: 'board-front' }, '칠 판'),
     h('div', { class: 'col-labels', style: `grid-template-columns:repeat(${d.cols},1fr)` },
@@ -410,7 +446,16 @@ function seatEditor() {
 
   const right = h('div', null,
     h('div', { class: 'card' }, h('h3', null, '자리 배치 규칙'),
-      h('div', { class: 'radios' }, MODES.map(([v, n]) => h('label', null, h('input', { type: 'radio', name: 'mode', checked: d.mode === v, onchange: () => { d.mode = v; } }), n)))),
+      h('div', { class: 'radios' }, MODES.map(([v, n]) => h('label', null, h('input', { type: 'radio', name: 'mode', checked: d.mode === v, onchange: () => { d.mode = v; } }), n))),
+      h('label', { class: 'row', style: 'gap:6px;margin-top:10px;cursor:pointer' }, h('input', { type: 'checkbox', checked: !!d.teamBalance, onchange: (e) => { d.teamBalance = e.target.checked; } }), '모둠에 남녀 최대한 같은 비율로'),
+      h('div', { class: 'muted', style: 'margin-top:4px;line-height:1.6' }, '체크하면 위의 짝 규칙을 기본으로 하되, 모든 모둠을 합쳐서 남녀 비율이 최대한 1:1에 가깝도록 맞춰요. (학급 전체 성비가 1:1이 아니면 그 비율에 맞춰요)')),
+    h('div', { class: 'card' }, h('h3', null, '모둠 구성'),
+      d.teams.length ? d.teams.map((t, ti) => h('div', { class: 'list-item' },
+        h('span', { class: 'dot', style: `background:${TEAM_COLORS[ti % TEAM_COLORS.length]}` }),
+        h('input', { value: t.name, maxlength: 12, style: 'flex:1;min-width:0', oninput: (e) => { t.name = e.target.value; }, onchange: () => rerender() }),
+        h('span', { class: 'muted' }, `${t.cells.length}자리`),
+        h('button', { class: 'sm ghost', onclick: () => { d.teams.splice(ti, 1); rerender(); } }, '✕')))
+        : h('div', { class: 'muted' }, '왼쪽에서 "모둠 지정"을 고르고 여러 자리를 누른 뒤 "모둠 만들기"를 눌러 주세요.')),
     h('div', { class: 'card' }, h('h3', null, '고정 자리 (학생에게는 보이지 않음)'),
       h('div', { class: 'row' }, fixSel, h('button', { class: 'sm', onclick: () => { ui.pick = Number(fixSel.value); rerender(); } }, '자리 고르기')),
       d.fixed.map((f, i) => h('div', { class: 'list-item' }, h('span', null, `${stuName(f.num)} → ${Math.floor(f.idx / d.cols) + 1}행 ${(f.idx % d.cols) + 1}열`),

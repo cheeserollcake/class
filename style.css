@@ -261,3 +261,10 @@ svg text { font-family: Pretendard, 'Pretendard Variable', -apple-system, 'Apple
 .col-labels { display: grid; gap: 6px; margin-bottom: 6px; }
 .col-label { width: 100%; min-width: 0; text-align: center; font-weight: 700; font-size: 14px; padding: 4px 2px; background: #eef0f3; border: 1px solid var(--line); border-radius: 4px; color: var(--text); }
 .col-label.ro { padding: 4px 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* 모둠 */
+.seat { flex-direction: column; gap: 1px; }
+.seat .tname, .pseat .tname { font-size: 10px; font-weight: 700; color: #374151; }
+.pseat .tchip { font-size: 10px; font-weight: 700; color: #374151; padding: 0 6px; border-radius: 3px; margin-top: 2px; }
+.list-item .dot { width: 14px; height: 14px; border-radius: 3px; flex: none; border: 1px solid rgba(0,0,0,.15); }
+.list-item { display: flex; align-items: center; gap: 8px; }
