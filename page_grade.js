@@ -11,13 +11,13 @@ APP.onLock.push(() => { GR.cfg = null; GR.data = {}; GR.dirty = false; });
 
 const uid = (p) => p + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
 const defCfg = () => ({ labels: ['매우잘함', '잘함', '보통', '노력요함'], perf: { '1': [], '2': [] }, evals: [] });
-const autoCuts = (max) => [0.7, 0.3, 0.1].map((r) => Math.round(max * r * 10) / 10);
+const autoCuts = (max) => [0.7, 0.3, 0.1].map((r) => Math.floor(max * r + 1e-9));
 const LV_CLASS = ['lv0', 'lv1', 'lv2', 'lv3'];
 const perfKey = (sem, sid) => `grade:perf:${sem}:${sid}`;
 const evalKey = (id) => `grade:eval:${id}`;
 const stuName = (n) => (S.roster.find((x) => Number(x.num) === Number(n)) || {}).name || n + '번';
 const num = (v) => (v === '' || v == null || isNaN(Number(v)) ? null : Number(v));
-const fmt = (n) => (n == null ? '-' : Math.round(n * 10) / 10);
+const fmt = (n) => (n == null ? '-' : Math.floor(n + 1e-9));   // 소수점 아래는 버림
 const bandIdx = (cuts, sc) => (sc == null ? -1 : sc >= cuts[0] ? 0 : sc >= cuts[1] ? 1 : sc >= cuts[2] ? 2 : 3);
 const norm = (v) => String(v == null ? '' : v).trim().toLowerCase().replace(/[①-⑩]/g, (c) => String('①②③④⑤⑥⑦⑧⑨⑩'.indexOf(c) + 1));
 const evMax = (ev) => (ev.type === 'answers' ? ev.items.reduce((s, i) => s + (Number(i.pts) || 0), 0) : Number(ev.max) || 0);
@@ -266,7 +266,7 @@ async function evalEntry(ev, redraw) {
   const stats = h('div', { class: 'row muted', style: 'margin-bottom:10px' });
   const upStats = () => {
     const vals = roster.map((s) => evalTotal(ev, d, s.num)).filter((v) => v != null);
-    stats.textContent = vals.length ? `입력 ${vals.length}명 · 평균 ${fmt(vals.reduce((a, b) => a + b, 0) / vals.length)}점 · 최고 ${Math.max(...vals)} · 최저 ${Math.min(...vals)}${ev.cut != null ? ` · 기준 도달 ${vals.filter((v) => v >= ev.cut).length}명` : ''}` : '아직 입력된 점수가 없습니다';
+    stats.textContent = vals.length ? `입력 ${vals.length}명 · 평균 ${fmt(vals.reduce((a, b) => a + b, 0) / vals.length)}점 · 최고 ${fmt(Math.max(...vals))} · 최저 ${fmt(Math.min(...vals))}${ev.cut != null ? ` · 기준 도달 ${vals.filter((v) => v >= ev.cut).length}명` : ''}` : '아직 입력된 점수가 없습니다';
   };
   const rows = roster.map((s, ri) => {
     const res = h('td', { class: 'sc-res' }), tot = h('td', { class: 'sc-tot' });
@@ -345,7 +345,7 @@ function lineChart(labels, series, titles) {
     let last = -1;
     s.values.forEach((v, i) => {
       if (v == null) return; last = i;
-      svg.append(sv('circle', { cx: x(i), cy: y(v), r: 4.5, fill: s.color, stroke: '#fff', 'stroke-width': 2 }, (() => { const t = sv('title'); t.textContent = `${s.name} · ${titles[i]}: ${Math.round(v * 10) / 10}%`; return t; })()));
+      svg.append(sv('circle', { cx: x(i), cy: y(v), r: 4.5, fill: s.color, stroke: '#fff', 'stroke-width': 2 }, (() => { const t = sv('title'); t.textContent = `${s.name} · ${titles[i]}: ${fmt(v)}%`; return t; })()));
     });
     if (last >= 0) svg.append(txt({ x: x(last) + 9, y: y(s.values[last]) + 4, 'font-size': 11, 'font-weight': 600, fill: INK }, s.name));
   });
@@ -358,11 +358,11 @@ function barChart(names, vals, avg, title) {
     const cx = m.l + bw * i + bw / 2;
     if (v != null) {
       const h0 = y(0) - y(v);
-      svg.append(sv('path', { d: `M${cx - bw * 0.3},${y(0)} v${-Math.max(h0 - 4, 0)} q0,-4 4,-4 h${bw * 0.6 - 8} q4,0 4,4 v${Math.max(h0 - 4, 0)} z`, fill: C1 }, (() => { const t = sv('title'); t.textContent = `${names[i]}: ${Math.round(v * 10) / 10}%`; return t; })()));
+      svg.append(sv('path', { d: `M${cx - bw * 0.3},${y(0)} v${-Math.max(h0 - 4, 0)} q0,-4 4,-4 h${bw * 0.6 - 8} q4,0 4,4 v${Math.max(h0 - 4, 0)} z`, fill: C1 }, (() => { const t = sv('title'); t.textContent = `${names[i]}: ${fmt(v)}%`; return t; })()));
     }
     svg.append(txt({ x: cx, y: H - m.b + 16, 'text-anchor': 'middle', 'font-size': bw < 26 ? 9 : 11, fill: INK }, names[i].length > 3 ? names[i].slice(0, 3) : names[i]));
   });
-  if (avg != null) svg.append(sv('line', { x1: m.l, x2: W - m.r, y1: y(avg), y2: y(avg), stroke: C2, 'stroke-width': 2, 'stroke-dasharray': '6 4' }), txt({ x: W - m.r, y: y(avg) - 6, 'text-anchor': 'end', 'font-size': 11, 'font-weight': 600, fill: INK }, `학급 평균 ${Math.round(avg * 10) / 10}%`));
+  if (avg != null) svg.append(sv('line', { x1: m.l, x2: W - m.r, y1: y(avg), y2: y(avg), stroke: C2, 'stroke-width': 2, 'stroke-dasharray': '6 4' }), txt({ x: W - m.r, y: y(avg) - 6, 'text-anchor': 'end', 'font-size': 11, 'font-weight': 600, fill: INK }, `학급 평균 ${fmt(avg)}%`));
   return svg;
 }
 const pct = (a, v) => (v == null || !a.max ? null : (v / a.max) * 100);
