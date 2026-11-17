@@ -4,13 +4,14 @@
 const APP = window.APP;
 const { S, h, api, toast, errMsg, clone, kvGet } = APP;
 
-const GR = { cfg: null, data: {}, tab: 'perf', ptab: 'base', sem: '1', subId: null, evalId: null, dirty: false,
-  creating: false, editing: false, tmode: 'student', tStu: null, tAsm: null, vStu: null, vAsm: 'all', vDetail: true };
+const curSem = () => { const m = new Date().getMonth() + 1; return m >= 2 && m <= 7 ? '1' : '2'; };
+const GR = { cfg: null, data: {}, tab: 'perf', ptab: 'base', sem: curSem(), subId: null, evalId: null, dirty: false,
+  creating: false, editing: false, tmode: 'student', tStu: null, tAsm: null, tSel: null, vStu: null, vSel: null, vDetail: true };
 APP.onLock.push(() => { GR.cfg = null; GR.data = {}; GR.dirty = false; });
 
 const uid = (p) => p + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
 const defCfg = () => ({ labels: ['매우잘함', '잘함', '보통', '노력요함'], perf: { '1': [], '2': [] }, evals: [] });
-const autoCuts = (max) => [0.9, 0.7, 0.5].map((r) => Math.round(max * r * 10) / 10);
+const autoCuts = (max) => [0.7, 0.3, 0.1].map((r) => Math.round(max * r * 10) / 10);
 const LV_CLASS = ['lv0', 'lv1', 'lv2', 'lv3'];
 const perfKey = (sem, sid) => `grade:perf:${sem}:${sid}`;
 const evalKey = (id) => `grade:eval:${id}`;
@@ -103,6 +104,19 @@ async function exportGrades() {
 
 const semToggle = (redraw) => h('div', { class: 'tabs' }, ['1', '2'].map((s) =>
   h('button', { class: 'tab sm' + (GR.sem === s ? ' active' : ''), onclick: () => { GR.sem = s; GR.subId = null; redraw(); } }, s + '학기')));
+/* 표 안의 입력칸을 화살표로 이동 (data-r: 학생, data-c: 칸) */
+function gridNav(wrap) {
+  wrap.addEventListener('keydown', (e) => {
+    const t = e.target; if (!t.classList || !t.classList.contains('gcell')) return;
+    const d = { ArrowUp: [-1, 0], ArrowDown: [1, 0], ArrowLeft: [0, -1], ArrowRight: [0, 1] }[e.key];
+    if (!d) return;
+    e.preventDefault();
+    const r = Number(t.dataset.r) + d[0], c = Number(t.dataset.c) + d[1];
+    const nx = wrap.querySelector(`.gcell[data-r="${r}"][data-c="${c}"]`);
+    if (nx) { nx.focus(); if (nx.select) nx.select(); }
+  });
+  return wrap;
+}
 const dirtyNote = () => (GR.dirty ? h('span', { class: 'muted' }, '저장하지 않은 변경이 있습니다') : null);
 
 /* =====================================================
@@ -132,11 +146,18 @@ function perfBase(redraw) {
         h('td', { class: 'del' }, h('button', { class: 'sm ghost', onclick: () => { sb.items.splice(ii, 1); dirty(); redraw(); } }, '✕'))))))),
     h('div', { style: 'margin-top:8px' }, h('button', { class: 'sm', onclick: () => { sb.items.push({ id: uid('i'), name: '', max: 10, cuts: autoCuts(10) }); dirty(); redraw(); } }, '+ 평가기준 추가'))));
   return h('div', null, semToggle(redraw),
-    h('div', { class: 'card' }, labelRow, h('div', { class: 'muted', style: 'margin-top:6px' }, '만점을 바꾸면 기준 점수가 90%·70%·50%로 자동 채워져요. 직접 고쳐도 됩니다.')),
+    h('div', { class: 'card' }, labelRow, h('div', { class: 'muted', style: 'margin-top:6px' }, '기준 점수는 만점의 70%·30%·10%로 자동 채워져요. (만점 100점이면 70·30·10점) 직접 고쳐도 됩니다.')),
     cards,
     h('div', { class: 'row' }, h('button', { onclick: () => { subs.push({ id: uid('s'), name: '', items: [{ id: uid('i'), name: '', max: 10, cuts: autoCuts(10) }] }); dirty(); redraw(); } }, '+ 과목 추가'),
       h('div', { style: 'flex:1' }), dirtyNote(),
-      h('button', { class: 'primary', onclick: async () => { try { await saveCfg(); GR.dirty = false; toast('기초작업을 저장했습니다'); redraw(); } catch (e) { toast(errMsg(e), true); } } }, '저장')));
+      h('button', { class: 'primary', onclick: async () => {
+        for (const sb of subs) for (const it of sb.items) {
+          const nm = `${sb.name || '(과목)'} - ${it.name || '(평가기준)'}`;
+          if (!(it.max > 0)) return toast(`${nm}: 만점은 0보다 커야 해요`, true);
+          if (it.cuts.some((c) => c > it.max)) return toast(`${nm}: 기준 점수가 만점(${it.max}점)보다 클 수 없어요`, true);
+          if (!(it.cuts[0] >= it.cuts[1] && it.cuts[1] >= it.cuts[2])) return toast(`${nm}: 기준 점수는 ${labels[0]} ≥ ${labels[1]} ≥ ${labels[2]} 순서여야 해요`, true);
+        }
+        try { await saveCfg(); GR.dirty = false; toast('기초작업을 저장했습니다'); redraw(); } catch (e) { toast(errMsg(e), true); } } }, '저장')));
 }
 
 async function perfEval(redraw) {
@@ -146,14 +167,14 @@ async function perfEval(redraw) {
   const key = perfKey(GR.sem, sb.id); await loadKeys([key]);
   const d = GR.data[key], labels = GR.cfg.labels;
   const sel = h('select', { value: sb.id, onchange: (e) => { GR.subId = e.target.value; redraw(); } }, subs.map((s) => h('option', { value: s.id }, s.name || '(이름 없음)')));
-  const rows = APP.roster().map((s) => {
-    const tds = sb.items.map((it) => {
+  const rows = APP.roster().map((s, ri) => {
+    const tds = sb.items.map((it, ci) => {
       const chip = h('span', { class: 'lvchip' });
       const upd = () => {
         const v = num(d.scores[s.num] && d.scores[s.num][it.id]), bi = bandIdx(it.cuts, v);
         chip.textContent = bi < 0 ? '' : labels[bi]; chip.className = 'lvchip ' + (bi < 0 ? '' : LV_CLASS[bi]);
       };
-      const inp = h('input', { type: 'number', step: 'any', min: 0, max: it.max, value: d.scores[s.num] && d.scores[s.num][it.id] != null ? d.scores[s.num][it.id] : '',
+      const inp = h('input', { type: 'number', step: 'any', min: 0, max: it.max, class: 'gcell', 'data-r': ri, 'data-c': ci, value: d.scores[s.num] && d.scores[s.num][it.id] != null ? d.scores[s.num][it.id] : '',
         oninput: (e) => {
           const v = e.target.value; d.scores[s.num] = d.scores[s.num] || {};
           if (v === '') delete d.scores[s.num][it.id]; else d.scores[s.num][it.id] = Number(v);
@@ -177,9 +198,10 @@ async function perfEval(redraw) {
             exportSheet(`${GR.sem}학기_${sb.name}`, [head, ...body]);
           } catch (e) { toast(errMsg(e), true); }
         } }, '저장')),
-      h('div', { class: 'table-wrap' }, h('table', { class: 'roster survey' },
+      h('div', { class: 'muted', style: 'margin:4px 0 8px' }, '↑↓ 이전·다음 학생, ←→ 같은 학생의 다른 평가로 이동해요.'),
+      gridNav(h('div', { class: 'table-wrap' }, h('table', { class: 'roster survey' },
         h('thead', null, h('tr', null, h('th', null, '학생'), sb.items.map((it) => h('th', null, `${it.name || '(기준)'} / ${it.max}점`)))),
-        h('tbody', null, rows)))));
+        h('tbody', null, rows))))));
 }
 
 /* =====================================================
@@ -227,6 +249,8 @@ function evalForm(ev, redraw) {
         h('button', { class: 'primary', onclick: async () => {
           if (!e.name.trim()) return toast('평가 이름을 입력하세요', true);
           if (evMax(e) <= 0) return toast('만점이 0보다 커야 합니다', true);
+          if (e.cut != null && e.cut > evMax(e)) return toast(`기준 점수(${e.cut}점)가 만점(${evMax(e)}점)보다 클 수 없어요. 기준 점수를 고쳐 주세요.`, true);
+          if (e.cut != null && e.cut < 0) return toast('기준 점수는 0 이상이어야 해요', true);
           if (isNew) GR.cfg.evals.push(e);
           try { await saveCfg(); GR.evalId = e.id; GR.creating = false; GR.editing = false; toast('평가를 저장했습니다'); redraw(); } catch (x) { toast(errMsg(x), true); }
         } }, '저장')));
@@ -244,7 +268,7 @@ async function evalEntry(ev, redraw) {
     const vals = roster.map((s) => evalTotal(ev, d, s.num)).filter((v) => v != null);
     stats.textContent = vals.length ? `입력 ${vals.length}명 · 평균 ${fmt(vals.reduce((a, b) => a + b, 0) / vals.length)}점 · 최고 ${Math.max(...vals)} · 최저 ${Math.min(...vals)}${ev.cut != null ? ` · 기준 도달 ${vals.filter((v) => v >= ev.cut).length}명` : ''}` : '아직 입력된 점수가 없습니다';
   };
-  const rows = roster.map((s) => {
+  const rows = roster.map((s, ri) => {
     const res = h('td', { class: 'sc-res' }), tot = h('td', { class: 'sc-tot' });
     const upd = () => {
       const t = evalTotal(ev, d, s.num);
@@ -254,12 +278,12 @@ async function evalEntry(ev, redraw) {
     };
     let cells;
     if (ev.type === 'score') {
-      cells = [h('td', null, h('input', { type: 'number', step: 'any', min: 0, max, value: d.scores[s.num] != null ? d.scores[s.num] : '', style: 'width:90px;text-align:center', oninput: (e) => {
+      cells = [h('td', null, h('input', { type: 'number', step: 'any', min: 0, max, class: 'gcell', 'data-r': ri, 'data-c': 0, value: d.scores[s.num] != null ? d.scores[s.num] : '', style: 'width:90px;text-align:center', oninput: (e) => {
         const v = e.target.value; if (v === '') delete d.scores[s.num]; else d.scores[s.num] = Number(v);
         e.target.classList.toggle('bad', Number(v) > max || Number(v) < 0); GR.dirty = true; upd(); } }))];
     } else {
       cells = ev.items.map((it, i) => {
-        const inp = h('input', { class: 'ans', value: (d.answers[s.num] || [])[i] || '', oninput: (e) => {
+        const inp = h('input', { class: 'ans gcell', 'data-r': ri, 'data-c': i, value: (d.answers[s.num] || [])[i] || '', oninput: (e) => {
           const arr = (d.answers[s.num] = d.answers[s.num] || []); arr[i] = e.target.value; GR.dirty = true; mark(); upd(); } });
         const mark = () => { const r = norm(inp.value); inp.classList.toggle('ok', r !== '' && r === norm(it.ans)); inp.classList.toggle('no', r !== '' && r !== norm(it.ans)); };
         mark(); return h('td', null, inp);
@@ -287,7 +311,8 @@ async function evalEntry(ev, redraw) {
         } catch (e) { toast(errMsg(e), true); }
       } }, '저장')),
     stats,
-    h('div', { class: 'table-wrap' }, h('table', { class: 'roster survey' }, h('thead', null, head), h('tbody', null, rows))));
+    h('div', { class: 'muted', style: 'margin:-4px 0 8px' }, ev.type === 'answers' ? '←→ 옆 문항, ↑↓ 위아래 학생으로 이동해요. (Tab도 됩니다)' : '↑↓ 이전·다음 학생으로 이동해요.'),
+    gridNav(h('div', { class: 'table-wrap' }, h('table', { class: 'roster survey' }, h('thead', null, head), h('tbody', null, rows)))));
 }
 
 /* =====================================================
@@ -342,6 +367,23 @@ function barChart(names, vals, avg, title) {
 }
 const pct = (a, v) => (v == null || !a.max ? null : (v / a.max) * 100);
 
+/* 평가 고르기 체크박스 (GR[key]: 고른 id 배열, null이면 전체) */
+const chosenOf = (key, list) => (GR[key] == null ? list : list.filter((a) => GR[key].includes(a.id)));
+function asmPicker(key, list, redraw) {
+  const on = new Set(chosenOf(key, list).map((a) => a.id));
+  const set = (ids) => { GR[key] = ids.length === list.length ? null : ids; redraw(); };
+  const groups = new Map();
+  list.forEach((a) => { const g = a.kind === 'perf' ? a.id.split(':')[1] + '학기 수행평가' : '기타 평가'; if (!groups.has(g)) groups.set(g, []); groups.get(g).push(a); });
+  return h('details', { class: 'asm-pick', open: GR[key + 'Open'] ? '' : null, ontoggle: (e) => { GR[key + 'Open'] = e.target.open; } },
+    h('summary', null, `평가 고르기 (${on.size}/${list.length}개 선택)`),
+    h('div', { class: 'row', style: 'gap:6px;margin:8px 0' },
+      h('button', { class: 'sm', onclick: () => set(list.map((a) => a.id)) }, '전체 선택'),
+      h('button', { class: 'sm', onclick: () => set([]) }, '전체 해제')),
+    [...groups.entries()].map(([g, arr]) => h('div', { class: 'asm-group' },
+      h('label', { class: 'asm-gname' }, h('input', { type: 'checkbox', checked: arr.every((a) => on.has(a.id)), onchange: (e) => { arr.forEach((a) => (e.target.checked ? on.add(a.id) : on.delete(a.id))); set(list.filter((a) => on.has(a.id)).map((a) => a.id)); } }), g),
+      h('div', { class: 'asm-items' }, arr.map((a) => h('label', null, h('input', { type: 'checkbox', checked: on.has(a.id), onchange: (e) => { e.target.checked ? on.add(a.id) : on.delete(a.id); set(list.filter((x) => on.has(x.id)).map((x) => x.id)); } }), a.label.replace(/^\d학기 /, '')))))));
+}
+
 function viewTrend(redraw) {
   const asm = assessments(), roster = APP.roster();
   if (!asm.length) return h('div', { class: 'card placeholder' }, '아직 평가가 없습니다. 수행평가나 기타 평가를 먼저 입력해 주세요.');
@@ -353,13 +395,17 @@ function viewTrend(redraw) {
     h('label', null, h('input', { type: 'radio', name: 'tm', checked: GR.tmode === v, onchange: () => { GR.tmode = v; redraw(); } }), n))));
   let chart, table;
   if (!withData.length) return h('div', null, bar, h('div', { class: 'card placeholder' }, '입력된 점수가 없습니다.'));
+  const pickTrend = () => asmPicker('tSel', withData, redraw);
+  const use = chosenOf('tSel', withData);
+  const none = () => h('div', null, bar, h('div', { class: 'card' }, pickTrend(), h('div', { class: 'placeholder' }, '볼 평가를 하나 이상 골라 주세요.')));
   if (GR.tmode === 'student') {
+    if (!use.length) return none();
     const sel = h('select', { value: GR.tStu || roster[0].num, onchange: (e) => { GR.tStu = Number(e.target.value); redraw(); } }, roster.map((s) => h('option', { value: s.num }, `${s.num}번 ${s.name}`)));
     const sn = Number(GR.tStu || roster[0].num);
-    const mine = withData.map((a) => pct(a, scoreOf(a, sn))), avg = withData.map((a) => mean(classVals(a)));
-    chart = h('div', null, h('div', { class: 'row gap' }, sel, legend([[C1, stuName(sn)], [C2, '학급 평균', true]])),
-      lineChart(withData.map((a) => a.short), [{ name: '학급 평균', values: avg, color: C2, dash: true }, { name: stuName(sn), values: mine, color: C1 }], withData.map((a) => a.label)));
-    table = [['평가', stuName(sn), '학급 평균'], ...withData.map((a, i) => [a.label, fmt(mine[i]) + '%', fmt(avg[i]) + '%'])];
+    const mine = use.map((a) => pct(a, scoreOf(a, sn))), avg = use.map((a) => mean(classVals(a)));
+    chart = h('div', null, h('div', { class: 'row gap' }, sel, legend([[C1, stuName(sn)], [C2, '학급 평균', true]])), pickTrend(),
+      lineChart(use.map((a) => a.short), [{ name: '학급 평균', values: avg, color: C2, dash: true }, { name: stuName(sn), values: mine, color: C1 }], use.map((a) => a.label)));
+    table = [['평가', stuName(sn), '학급 평균'], ...use.map((a, i) => [a.label, fmt(mine[i]) + '%', fmt(avg[i]) + '%'])];
   } else if (GR.tmode === 'asm') {
     const cur = withData.find((a) => a.id === GR.tAsm) || withData[0];
     const sel = h('select', { value: cur.id, onchange: (e) => { GR.tAsm = e.target.value; redraw(); } }, withData.map((a) => h('option', { value: a.id }, a.label)));
@@ -367,10 +413,11 @@ function viewTrend(redraw) {
     chart = h('div', null, h('div', { class: 'row gap' }, sel, legend([[C1, '학생 점수(만점 대비 %)'], [C2, '학급 평균', true]])), barChart(roster.map((s) => s.name), vals, avg, cur.label));
     table = [['학생', '점수', '%'], ...roster.map((s, i) => [`${s.num} ${s.name}`, fmt(scoreOf(cur, s.num)), fmt(vals[i]) + '%'])];
   } else {
-    const avg = withData.map((a) => mean(classVals(a))), mx = withData.map((a) => Math.max(...classVals(a))), mn = withData.map((a) => Math.min(...classVals(a)));
-    chart = h('div', null, h('div', { class: 'row gap' }, legend([[C1, '평균'], [C3, '최고'], [C2, '최저']])),
-      lineChart(withData.map((a) => a.short), [{ name: '최고', values: mx, color: C3 }, { name: '최저', values: mn, color: C2 }, { name: '평균', values: avg, color: C1 }], withData.map((a) => a.label)));
-    table = [['평가', '평균', '최고', '최저'], ...withData.map((a, i) => [a.label, fmt(avg[i]) + '%', fmt(mx[i]) + '%', fmt(mn[i]) + '%'])];
+    if (!use.length) return none();
+    const avg = use.map((a) => mean(classVals(a))), mx = use.map((a) => Math.max(...classVals(a))), mn = use.map((a) => Math.min(...classVals(a)));
+    chart = h('div', null, h('div', { class: 'row gap' }, legend([[C1, '평균'], [C3, '최고'], [C2, '최저']])), pickTrend(),
+      lineChart(use.map((a) => a.short), [{ name: '최고', values: mx, color: C3 }, { name: '최저', values: mn, color: C2 }, { name: '평균', values: avg, color: C1 }], use.map((a) => a.label)));
+    table = [['평가', '평균', '최고', '최저'], ...use.map((a, i) => [a.label, fmt(avg[i]) + '%', fmt(mx[i]) + '%', fmt(mn[i]) + '%'])];
   }
   return h('div', null, bar, h('div', { class: 'card' }, chart,
     h('details', { style: 'margin-top:12px' }, h('summary', null, '표로 보기'),
@@ -384,8 +431,9 @@ function viewLookup(redraw) {
   const asm = assessments(), roster = APP.roster();
   if (!asm.length) return h('div', { class: 'card placeholder' }, '아직 평가가 없습니다.');
   const sn = Number(GR.vStu || roster[0].num), labels = GR.cfg.labels;
-  const ss = h('select', { value: sn, onchange: (e) => { GR.vStu = Number(e.target.value); redraw(); } }, roster.map((s) => h('option', { value: s.num }, `${s.num}번 ${s.name}`)));
-  const sa = h('select', { value: GR.vAsm, onchange: (e) => { GR.vAsm = e.target.value; redraw(); } }, h('option', { value: 'all' }, '전체 평가'), asm.map((a) => h('option', { value: a.id }, a.label)));
+  const ss = h('select', { value: sn, onchange: (e) => { GR.vStu = Number(e.target.value); redraw(); } }, roster.map((s) => h('option', { value: s.num, selected: s.num === sn }, `${s.num}번 ${s.name}`)));
+  const use = chosenOf('vSel', asm);
+  const hasAns = use.some((a) => a.kind === 'eval' && a.ev.type === 'answers');
   const radios = h('div', { class: 'radios' }, [[true, '문항별 맞고 틀림 보기'], [false, '점수만 보기']].map(([v, n]) =>
     h('label', null, h('input', { type: 'radio', name: 'vd', checked: GR.vDetail === v, onchange: () => { GR.vDetail = v; redraw(); } }), n)));
   const resultOf = (a) => {
@@ -394,23 +442,22 @@ function viewLookup(redraw) {
     if (a.kind === 'perf') { const b = bandIdx(a.cuts, sc); return h('span', null, `${fmt(sc)} / ${a.max}점 `, h('span', { class: 'lvchip ' + LV_CLASS[b] }, labels[b])); }
     return h('span', null, `${fmt(sc)} / ${a.max}점 `, a.ev.cut != null ? h('span', { class: 'lvchip ' + (sc >= a.ev.cut ? 'lv0' : 'lv3') }, sc >= a.ev.cut ? '기준 도달' : '미도달') : null);
   };
-  let out;
-  if (GR.vAsm === 'all') {
-    out = h('div', { class: 'table-wrap' }, h('table', { class: 'roster survey' }, h('thead', null, h('tr', null, ['평가', '결과', '만점 대비'].map((t) => h('th', null, t)))),
-      h('tbody', null, asm.map((a) => { const sc = scoreOf(a, sn); return h('tr', null, h('td', { style: 'text-align:left;padding:8px 10px' }, a.label), h('td', null, resultOf(a)), h('td', null, sc == null ? '' : fmt(pct(a, sc)) + '%')); }))));
-  } else {
-    const a = asm.find((x) => x.id === GR.vAsm);
-    out = h('div', null, h('div', { style: 'font-size:18px;font-weight:700;margin-bottom:10px' }, a.label, ' — ', resultOf(a)));
-    if (a.kind === 'eval' && a.ev.type === 'answers' && GR.vDetail) {
+  const out = h('div');
+  if (!use.length) out.append(h('div', { class: 'placeholder' }, '볼 평가를 하나 이상 골라 주세요.'));
+  else {
+    out.append(h('div', { class: 'table-wrap' }, h('table', { class: 'roster survey' }, h('thead', null, h('tr', null, ['평가', '결과', '만점 대비'].map((t) => h('th', null, t)))),
+      h('tbody', null, use.map((a) => { const sc = scoreOf(a, sn); return h('tr', null, h('td', { style: 'text-align:left;padding:8px 10px' }, a.label), h('td', null, resultOf(a)), h('td', null, sc == null ? '' : fmt(pct(a, sc)) + '%')); })))));
+    if (GR.vDetail) use.filter((a) => a.kind === 'eval' && a.ev.type === 'answers' && scoreOf(a, sn) != null).forEach((a) => {
       const resp = (GR.data[a.key].answers || {})[sn] || [];
-      out.append(h('div', { class: 'table-wrap' }, h('table', { class: 'roster survey' }, h('thead', null, h('tr', null, ['문항', '학생 응답', '정답', '배점', '결과'].map((t) => h('th', null, t)))),
-        h('tbody', null, a.ev.items.map((it, i) => {
-          const ok = norm(resp[i]) !== '' && norm(resp[i]) === norm(it.ans), blank = norm(resp[i]) === '';
-          return h('tr', null, h('td', null, i + 1), h('td', null, resp[i] || ''), h('td', null, it.ans), h('td', null, it.pts),
-            h('td', null, blank ? '' : h('span', { class: 'lvchip ' + (ok ? 'lv0' : 'lv3') }, ok ? 'O' : 'X')));
-        })))));
-    }
+      out.append(h('h3', { style: 'margin:18px 0 8px' }, a.label, ' — ', resultOf(a)),
+        h('div', { class: 'table-wrap' }, h('table', { class: 'roster survey' }, h('thead', null, h('tr', null, ['문항', '학생 응답', '정답', '배점', '결과'].map((t) => h('th', null, t)))),
+          h('tbody', null, a.ev.items.map((it, i) => {
+            const ok = norm(resp[i]) !== '' && norm(resp[i]) === norm(it.ans), blank = norm(resp[i]) === '';
+            return h('tr', null, h('td', null, i + 1), h('td', null, resp[i] || ''), h('td', null, it.ans), h('td', null, it.pts),
+              h('td', null, blank ? '' : h('span', { class: 'lvchip ' + (ok ? 'lv0' : 'lv3') }, ok ? 'O' : 'X')));
+          })))));
+    });
   }
-  return h('div', null, h('div', { class: 'card' }, h('div', { class: 'row gap' }, ss, sa), GR.vAsm !== 'all' && asm.find((x) => x.id === GR.vAsm).kind === 'eval' && asm.find((x) => x.id === GR.vAsm).ev.type === 'answers' ? radios : null), h('div', { class: 'card' }, out));
+  return h('div', null, h('div', { class: 'card' }, h('div', { class: 'row gap' }, ss, hasAns ? radios : null), asmPicker('vSel', asm, redraw)), h('div', { class: 'card' }, out));
 }
 })();

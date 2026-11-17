@@ -701,3 +701,12 @@ const APP = window.APP = {
 /* ---------- 시작 ---------- */
 window.addEventListener('load', () => { if (DEMO) startApp(); else showLogin(); });
 })();
+
+/* 숫자 입력칸에 커서가 있을 때 마우스 휠로 값이 바뀌지 않게 (화면 스크롤만) */
+document.addEventListener('wheel', (e) => {
+  const t = e.target;
+  if (t && t.tagName === 'INPUT' && t.type === 'number' && document.activeElement === t) {
+    e.preventDefault();
+    window.scrollBy({ top: e.deltaY, left: e.deltaX });
+  }
+}, { passive: false });

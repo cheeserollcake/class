@@ -13,8 +13,9 @@ const FONT_LIST = [['Pretendard', '프리텐다드'], ['Jua', '주아체'], ['Bl
   ['Nanum Gothic', '나눔고딕'], ['Noto Sans KR', '본고딕(노토 산스)'], ['Gaegu', '개구체'], ['Hi Melody', '하이멜로디'], ['Single Day', '싱글데이'],
   ['Gamja Flower', '감자꽃'], ['Poor Story', '푸어스토리'], ['Yeon Sung', '연성체'], ['Sunflower', '해바라기'], ['Nanum Myeongjo', '나눔명조'], ['Nanum Pen Script', '나눔손글씨 펜']];
 const FONT_MAP = [[/jua|주아/, 'Jua'], [/blackhan/, 'Black Han Sans'], [/dohyeon|도현/, 'Do Hyeon'], [/gowun.*dodum|고운돋움/, 'Gowun Dodum'], [/nanum.*(gothic|barun)|나눔(고딕|바른)/, 'Nanum Gothic'],
-  [/nanum.*myeongjo|나눔명조|batang|바탕|myeongjo/, 'Nanum Myeongjo'], [/nanum.*pen|나눔.*펜/, 'Nanum Pen Script'], [/gaegu/, 'Gaegu'], [/himelody/, 'Hi Melody'], [/singleday/, 'Single Day'],
+  [/nanum.*myeongjo|나눔명조|batang|바탕|myeongjo|serif|명조/, 'Nanum Myeongjo'], [/nanum.*pen|나눔.*펜/, 'Nanum Pen Script'], [/gaegu/, 'Gaegu'], [/himelody/, 'Hi Melody'], [/singleday/, 'Single Day'],
   [/gamja/, 'Gamja Flower'], [/poorstory/, 'Poor Story'], [/yeonsung/, 'Yeon Sung'], [/sunflower/, 'Sunflower'], [/pretendard/, 'Pretendard'],
+  [/hy(gyeon|견)|headline|헤드라인|hygraphic|그래픽/, 'Black Han Sans'], [/hcr.*batang|함초롬바탕|신명조|smyeongjo|hymyeongjo|hyshinmyeongjo/, 'Nanum Myeongjo'], [/hcr.*dotum|함초롬돋움/, 'Noto Sans KR'],
   [/gmarket|지마켓|cookie|쿠키|tmoney|티머니|yg|한서|bmjua|배민/, 'Jua'], [/noto|gothic|gulim|dotum|malgun|맑은|고딕|돋움|굴림|sans/, 'Noto Sans KR']];
 function ensureFonts() {
   if (document.getElementById('role-fonts')) return;
@@ -32,11 +33,41 @@ function guessFont(pages) {
 }
 function initFont(rec) {
   RO.fontInfo = guessFont(RO.pages || []);
-  if (!rec.font) { rec.font = RO.fontInfo.family || 'Pretendard'; rec.bold = RO.fontInfo.bold; }
+  if (!rec.font || rec.fontV !== 2) { rec.font = 'auto'; rec.fontV = 2; }   // 기본: 칸 주변 글씨체를 따라가기
 }
-const fontCss = () => `"${(RO.form && RO.form.font) || 'Pretendard'}", Pretendard, 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif`;
-const applyFontTo = (sp) => { sp.style.fontFamily = fontCss(); sp.style.fontWeight = RO.form && RO.form.bold ? '700' : '400'; };
-const recordOf = (f) => ({ name: f.name, fileId: f.fileId, mime: f.mime, pageCount: f.pageCount, fields: f.fields, savedAt: Date.now(), font: f.font, bold: !!f.bold });
+/* 글꼴 이름 → 비슷한 웹 글꼴 */
+function mapFont(raw, boldFlag) {
+  const r = String(raw || '').replace(/^[A-Z]{6}\+/, ''), n = r.toLowerCase().replace(/[^a-z가-힣]/g, '');
+  if (!n) return null;
+  const hit = FONT_MAP.find(([re]) => re.test(n));
+  return { family: hit ? hit[1] : null, bold: !!boldFlag || /bold|black|heavy|굵|extra|semibold|medium/.test(n) && !/regular|light/.test(n) };
+}
+/* 칸 좌우(같은 줄)의 글자 → 없으면 칸 위 머리글의 글자 글씨체를 고르기 */
+function fieldFont(f) {
+  const p = RO.pages && RO.pages[f.page]; if (!p || !p.items || !p.items.length) return null;
+  const W = p.canvas.width, H = p.canvas.height, x0 = f.x * W, x1 = (f.x + f.w) * W, y0 = f.y * H, y1 = (f.y + f.h) * H, fh = y1 - y0;
+  const withFont = p.items.filter((i) => i.font);
+  const inRow = withFont.filter((i) => { const cy = i.y + i.h / 2; return cy >= y0 - fh * 0.25 && cy <= y1 + fh * 0.25 && (i.x + i.w <= x0 + 4 || i.x >= x1 - 4); });
+  let best = null, bd = Infinity;
+  inRow.forEach((i) => { const d = i.x >= x1 - 4 ? i.x - x1 : x0 - (i.x + i.w); if (d < bd) { bd = d; best = i; } });
+  if (!best) withFont.filter((i) => i.y + i.h <= y0 + 4 && Math.min(i.x + i.w, x1) - Math.max(i.x, x0) > 0).forEach((i) => { const d = y0 - (i.y + i.h); if (d < bd) { bd = d; best = i; } });
+  if (!best) return null;
+  const m = mapFont(best.font, best.bold);
+  return m && { family: m.family || (RO.fontInfo && RO.fontInfo.family) || 'Pretendard', bold: m.bold, src: best.font.replace(/^[A-Z]{6}\+/, '') };
+}
+function assignFieldFonts() { if (RO.form && RO.pages) RO.form.fields.forEach((f) => { f._font = fieldFont(f); }); }
+const isAuto = () => !RO.form || !RO.form.font || RO.form.font === 'auto';
+function fontOf(f) {
+  if (!isAuto()) return { family: RO.form.font, bold: !!RO.form.bold };
+  const a = f && f._font;
+  if (a) return { family: a.family, bold: a.bold };
+  return { family: (RO.fontInfo && RO.fontInfo.family) || 'Pretendard', bold: !!(RO.fontInfo && RO.fontInfo.bold) };
+}
+const fontCss = (f) => `"${fontOf(f).family}", Pretendard, 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif`;
+const applyFontTo = (sp, f) => { if (!f) { const box = sp.closest('.rbox'); f = box && RO.form && RO.form.fields.find((x) => x.id === box.dataset.id); } sp.style.fontFamily = fontCss(f); sp.style.fontWeight = fontOf(f).bold ? '700' : '400'; };
+/* 쓰이는 글꼴을 모두 불러오기 */
+const loadUsedFonts = () => Promise.race([Promise.all([...new Set((RO.form ? RO.form.fields : []).map((f) => `${fontOf(f).bold ? 700 : 400} 20px "${fontOf(f).family}"`))].map((q) => document.fonts.load(q).catch(() => {}))), new Promise((r) => setTimeout(r, 2500))]);
+const recordOf = (f) => ({ name: f.name, fileId: f.fileId, mime: f.mime, pageCount: f.pageCount, fields: f.fields.map(({ _font, ...x }) => x), savedAt: Date.now(), font: f.font, bold: !!f.bold, fontV: 2 });
 let metaTimer;
 function saveMetaLater() {
   if (!RO.form || !RO.form.name || !RO.form.fileId || RO.pending) return;
@@ -121,11 +152,12 @@ async function renderFile(bytes, mime) {
       const cv = document.createElement('canvas'); cv.width = Math.round(vp.width); cv.height = Math.round(vp.height);
       const ctx = cv.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, cv.width, cv.height);
       await pg.render({ canvasContext: ctx, canvas: cv, viewport: vp }).promise;
-      const tc = await pg.getTextContent(), items = [];
+      const tc = await pg.getTextContent(), items = [], fobj = {};
+      const fontInfo = (id) => { if (!(id in fobj)) { try { const o = pg.commonObjs.has(id) ? pg.commonObjs.get(id) : null; fobj[id] = o ? { name: String(o.name || ''), bold: !!(o.bold || o.black) } : null; } catch (e) { fobj[id] = null; } } return fobj[id]; };
       tc.items.forEach((it) => {
         if (!it.str || !it.str.trim()) return;
-        const t = pdfjs.Util.transform(vp.transform, it.transform), hgt = Math.hypot(t[2], t[3]);
-        items.push({ str: it.str, x: t[4], y: t[5] - hgt, w: it.width * vp.scale, h: hgt });
+        const t = pdfjs.Util.transform(vp.transform, it.transform), hgt = Math.hypot(t[2], t[3]), fi = fontInfo(it.fontName);
+        items.push({ str: it.str, x: t[4], y: t[5] - hgt, w: it.width * vp.scale, h: hgt, font: fi ? fi.name : '', bold: fi ? fi.bold : false });
       });
       let widgets = [];
       try {
@@ -190,6 +222,16 @@ APP.pages.role = () => {
   return wrap;
 };
 window.addEventListener('resize', () => fitAll());
+/* 입력 칸 편집: 선택한 칸을 Delete / Backspace로 지우기 */
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Delete' && e.key !== 'Backspace') return;
+  if (!RO.form || RO.mode !== 'edit' || !RO.sel || !document.querySelector('.rstage')) return;
+  const a = document.activeElement;
+  if (a && (a.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)) || document.querySelector('.overlay')) return;
+  e.preventDefault();
+  RO.form.fields = RO.form.fields.filter((f) => f.id !== RO.sel); RO.sel = null;
+  if (RO.redraw) RO.redraw();
+});
 function fitAll() {
   requestAnimationFrame(() => document.querySelectorAll('.rbox .rtxt').forEach((sp) => {
     const box = sp.parentElement, hgt = box.clientHeight, wid = box.clientWidth; if (!hgt) return;
@@ -206,6 +248,8 @@ function fitAll() {
 
 function view(redraw) {
   closePicker();
+  RO.redraw = redraw;
+  assignFieldFonts();
   const busy = RO.busy ? h('div', { class: 'banner' }, RO.busy) : null;
   const guard = async (msg, fn) => { RO.busy = msg; redraw(); try { await fn(); } catch (e) { toast(errMsg(e), true); } RO.busy = ''; redraw(); };
 
@@ -218,7 +262,7 @@ function view(redraw) {
       const fields = detectAll(pages);
       RO.pages = pages; RO.pending = { b64: await fileToB64(f), mime, name: safeName(f.name) };
       const gf = guessFont(pages); RO.fontInfo = gf;
-      RO.form = { name: '', fileId: null, mime, fields, pageCount: pages.length, font: gf.family || 'Pretendard', bold: gf.bold }; RO.mode = 'edit'; RO.sel = null;
+      RO.form = { name: '', fileId: null, mime, fields, pageCount: pages.length, font: 'auto', bold: gf.bold, fontV: 2 }; RO.mode = 'edit'; RO.sel = null;
       const filled = fields.filter((x) => x.kind !== 'none').length;
       toast(fields.length ? `입력 칸 ${fields.length}개를 찾았어요 (역할 칸 ${filled}개). 위치와 종류를 확인해 주세요.` : '자동으로 찾은 칸이 없어요. "+ 칸 추가"로 직접 그려 주세요.');
     });
@@ -263,7 +307,7 @@ function view(redraw) {
           RO.pages = await renderFile(b64ToBytes(fj.data), fj.mime || f.mime); RO.form = f; initFont(f); RO.pending = null;
           RO.roles = rec.roles && rec.roles.length ? rec.roles : [{ name: '', desc: '', owner: '' }]; RO.setName = n; RO.mode = 'fill'; RO.sel = null;
           redraw(); await APP.exporter.wait(900);
-          try { await Promise.all([document.fonts.load(`${RO.form.bold ? 700 : 400} 20px "${RO.form.font}"`), document.fonts.ready]); } catch (e) { /* 기본 글꼴 */ }
+          try { assignFieldFonts(); await Promise.all([loadUsedFonts(), document.fonts.ready]); } catch (e) { /* 기본 글꼴 */ }
           await APP.exporter.wait(300);
           return roleCanvases();
         } };
@@ -291,7 +335,7 @@ function view(redraw) {
     RO.form.fields.filter((f) => f.page === pi).forEach((f) => {
       const box = h('div', { class: 'rbox' + (edit ? ' edit' : '') + (RO.sel === f.id ? ' sel' : ''), style: `left:${f.x * 100}%;top:${f.y * 100}%;width:${f.w * 100}%;height:${f.h * 100}%;${edit ? `border-color:${KCOLOR[f.kind]};background:${KCOLOR[f.kind]}22` : ''}`, 'data-id': f.id, 'data-kind': f.kind });
       const sp = h('span', { class: 'rtxt' });
-      sp.textContent = edit ? '' : textFor(f); applyFontTo(sp);
+      sp.textContent = edit ? '' : textFor(f); applyFontTo(sp, f);
       if (!edit && f.kind !== 'none' && f.row > 0) { box.classList.add('live'); sp.dataset.ph = KINDS.find((k) => k[0] === f.kind)[1]; makeEditable(sp, f, box, stage); }
       box.append(sp);
       if (edit) {
@@ -319,7 +363,7 @@ function view(redraw) {
   /* 칸 편집 패널 */
   const selF = RO.form.fields.find((f) => f.id === RO.sel);
   const panel = h('div', { class: 'card' }, h('h3', null, '입력 칸 편집'),
-    h('div', { class: 'muted', style: 'margin-bottom:8px' }, '색 칸을 끌어서 옮기고, 오른쪽 아래 모서리를 끌어서 크기를 바꾸세요. 칸을 누르면 종류를 고를 수 있어요.'),
+    h('div', { class: 'muted', style: 'margin-bottom:8px' }, '색 칸을 끌어서 옮기고, 오른쪽 아래 모서리를 끌어서 크기를 바꾸세요. 칸을 누르면 종류를 고를 수 있어요. 고른 칸은 Delete나 Backspace 키로 지울 수 있어요.'),
     h('div', { class: 'row gap' }, h('button', { class: 'sm', onclick: () => {
       const id = 'f' + Date.now().toString(36); RO.form.fields.push({ id, page: selF ? selF.page : 0, x: 0.3, y: 0.3, w: 0.3, h: 0.035, kind: 'none', row: 0 }); RO.sel = id; redraw();
     } }, '+ 칸 추가'), h('button', { class: 'sm ghost', onclick: () => { if (!confirm('자동 검출을 다시 하면 지금까지 고친 내용이 사라져요. 계속할까요?')) return; RO.form.fields = detectAll(RO.pages); RO.sel = null; redraw(); } }, '자동 검출 다시')),
@@ -342,11 +386,17 @@ function view(redraw) {
 
   /* 역할 입력 패널 (입력은 양식 위의 칸에 직접 합니다) */
   const rows = rowCount();
-  const changeFont = () => { saveMetaLater(); const w = RO.form.bold ? 700 : 400; Promise.race([document.fonts.load(`${w} 20px "${RO.form.font}"`), new Promise((r) => setTimeout(r, 2500))]).then(() => { document.querySelectorAll('.rbox .rtxt').forEach(applyFontTo); fitAll(); }); document.querySelectorAll('.rbox .rtxt').forEach(applyFontTo); fitAll(); };
+  const changeFont = () => { saveMetaLater(); const re = () => { document.querySelectorAll('.rbox .rtxt').forEach((sp) => applyFontTo(sp)); fitAll(); }; loadUsedFonts().then(re); re(); };
   const fontRow = h('div', { class: 'field' }, h('label', null, '양식 글씨체'),
     h('div', { class: 'row' },
-      h('select', { value: RO.form.font || 'Pretendard', onchange: (e) => { RO.form.font = e.target.value; changeFont(); } }, FONT_LIST.map(([v, n]) => h('option', { value: v }, n))),
-      h('label', { class: 'row', style: 'gap:4px;cursor:pointer' }, h('input', { type: 'checkbox', checked: !!RO.form.bold, onchange: (e) => { RO.form.bold = e.target.checked; changeFont(); } }), '굵게')),
+      h('select', { value: RO.form.font || 'auto', onchange: (e) => { RO.form.font = e.target.value; changeFont(); redraw(); } }, h('option', { value: 'auto' }, '자동 (칸 좌우 글씨체 따라가기)'), FONT_LIST.map(([v, n]) => h('option', { value: v }, n))),
+      isAuto() ? null : h('label', { class: 'row', style: 'gap:4px;cursor:pointer' }, h('input', { type: 'checkbox', checked: !!RO.form.bold, onchange: (e) => { RO.form.bold = e.target.checked; changeFont(); } }), '굵게')),
+    isAuto() ? h('div', { class: 'muted', style: 'margin-top:6px;line-height:1.6' }, (() => {
+      const live = RO.form.fields.filter((f) => f.kind !== 'none' && f.row > 0), cnt = {};
+      live.forEach((f) => { const o = fontOf(f), n = (FONT_LIST.find((x) => x[0] === o.family) || [0, o.family])[1] + (o.bold ? ' 굵게' : ''); cnt[n] = (cnt[n] || 0) + 1; });
+      const found = live.filter((f) => f._font).length;
+      return found ? `칸마다 좌우에 있는 글자의 글씨체를 보고 골랐어요: ${Object.entries(cnt).map(([n, c]) => `${n} ${c}칸`).join(', ')}` : '양식에서 글씨체 정보를 찾지 못해 기본 글꼴을 썼어요. (사진 양식은 글씨체를 알 수 없어요) 목록에서 직접 골라 주세요.';
+    })()) :
     h('div', { class: 'muted', style: 'margin-top:6px' }, RO.fontInfo && RO.fontInfo.name ? `이 양식에 쓰인 글꼴: ${RO.fontInfo.name}${RO.fontInfo.family ? ' (비슷한 글꼴을 자동으로 골랐어요)' : ' (같은 글꼴이 없어서 가장 비슷해 보이는 글꼴을 직접 골라 주세요)'}` : '양식과 가장 비슷해 보이는 글꼴을 골라 주세요. (고른 글꼴은 양식에 저장돼요)'));
   const fillPanel = h('div', { class: 'card' }, h('h3', null, '역할 입력'),
     h('div', { class: 'muted', style: 'margin-bottom:12px;line-height:1.65' }, '왼쪽 양식의 칸을 눌러 바로 입력하세요. 담당자 칸을 누르면 학생을 여러 명 골라 넣을 수 있어요. 글자는 가운데 정렬되고, 크기는 칸에 맞게 자동으로 조절돼요.'),
@@ -433,7 +483,7 @@ function refreshPicker() {
 async function roleCanvases() {
   const stage = document.querySelector('.rstage'); if (!stage) return [];
   const outs = [];
-  try { await Promise.all([document.fonts.load(`${RO.form.bold ? 700 : 400} 20px "${RO.form.font}"`), document.fonts.load('400 20px Pretendard')]); } catch (e) { /* 글꼴 없으면 기본 글꼴 */ }
+  try { await Promise.all([loadUsedFonts(), document.fonts.load('400 20px Pretendard')]); } catch (e) { /* 글꼴 없으면 기본 글꼴 */ }
   RO.pages.forEach((p, pi) => {
     const out = document.createElement('canvas'); out.width = p.canvas.width; out.height = p.canvas.height;
     const ctx = out.getContext('2d'); ctx.drawImage(p.canvas, 0, 0);
@@ -441,7 +491,7 @@ async function roleCanvases() {
       const f = RO.form.fields.find((x) => x.id === box.dataset.id), t = textFor(f); if (!t) return;
       const sp = box.querySelector('.rtxt'), scale = out.width / box.parentElement.clientWidth, fs = parseFloat(sp.style.fontSize || '12') * scale;
       const x = f.x * out.width, y = f.y * out.height, w = f.w * out.width, hh = f.h * out.height;
-      ctx.font = `${RO.form.bold ? 700 : 400} ${fs}px ${fontCss()}`; ctx.fillStyle = '#111'; ctx.textBaseline = 'middle'; ctx.textAlign = 'center';
+      ctx.font = `${fontOf(f).bold ? 700 : 400} ${fs}px ${fontCss(f)}`; ctx.fillStyle = '#111'; ctx.textBaseline = 'middle'; ctx.textAlign = 'center';
       const maxW = w - 6, lines = [];
       t.split('\n').forEach((par) => {
         let line = '';

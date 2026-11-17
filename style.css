@@ -284,3 +284,34 @@ svg text { font-family: Pretendard, 'Pretendard Variable', -apple-system, 'Apple
 
 .login-links { display: flex; justify-content: center; gap: 14px; margin-top: 16px; font-size: 12px; }
 .login-links a { color: #64748b; text-decoration: underline; }
+
+/* 누가기록 사건 성격 / 교우관계 4단계 조사 */
+.tone-row { gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+.tone-btn.on { background: #1f2937; color: #fff; border-color: #1f2937; }
+.tone-btn.t-긍정.on { background: #2f6fed; border-color: #2f6fed; }
+.tone-btn.t-부정.on { background: #e5484d; border-color: #e5484d; }
+.tone-badge { font-size: 11px; padding: 1px 7px; border-radius: 10px; background: #eef0f3; color: #4b5563; }
+.tone-badge.t-긍정 { background: #e3ecff; color: #2f6fed; }
+.tone-badge.t-부정 { background: #fde4e4; color: #c62828; }
+.sv-nav { gap: 8px; flex-wrap: wrap; }
+.sv-list { display: flex; flex-direction: column; gap: 4px; }
+.sv-row { display: flex; align-items: center; gap: 10px; padding: 5px 8px; border-radius: 8px; border: 1px solid transparent; flex-wrap: wrap; }
+.sv-row:focus { outline: none; border-color: #2f6fed; background: #f3f7ff; }
+.sv-fname { min-width: 84px; font-weight: 600; }
+.lv-group { display: flex; gap: 4px; flex-wrap: wrap; }
+.lv { padding: 5px 10px; font-size: 13px; border: 1px solid #d6dae0; background: #fff; border-radius: 6px; color: #374151; }
+.lv.on { background: var(--c); border-color: var(--c); color: #fff; font-weight: 700; }
+.lv-tag { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 12px; color: #fff; background: var(--c); }
+.legend { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: #4b5563; }
+.legend .ln { display: inline-block; width: 22px; height: 3px; margin-left: 6px; }
+.legend .ln.dash { background: repeating-linear-gradient(90deg, #e5484d 0 6px, transparent 6px 10px); }
+.legend .dot { display: inline-block; width: 12px; height: 12px; border-radius: 50%; margin-left: 6px; }
+@media (max-width: 640px) { .sv-row { gap: 4px; } .lv { padding: 5px 7px; font-size: 12px; } }
+
+/* 평가 고르기 */
+.asm-pick { margin-top: 10px; border: 1px solid #e2e8f0; border-radius: 8px; padding: 8px 12px; }
+.asm-pick summary { cursor: pointer; font-weight: 600; }
+.asm-group { margin: 6px 0 10px; }
+.asm-gname { font-weight: 700; display: inline-flex; gap: 6px; align-items: center; }
+.asm-items { display: flex; flex-wrap: wrap; gap: 4px 16px; margin: 4px 0 0 22px; }
+.asm-items label { display: inline-flex; gap: 5px; align-items: center; font-size: 14px; }

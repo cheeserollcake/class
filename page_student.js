@@ -5,7 +5,8 @@ const APP = window.APP;
 const { S, h, api, toast, errMsg, kvGet } = APP;
 
 const ST = { sub: 'input', logs: null, survey: null, date: null, text: '', editId: null,
-  kw: '', stu: '', order: 'desc', gsub: 'graph', layers: { co: true, like: true, dislike: true }, minCo: 1, sel: null };
+  kw: '', stu: '', order: 'desc', gsub: 'graph', src: { log: true, survey: true }, round: 'all', thr: 1, sel: null,
+  tone: '', svRound: null, rater: null };
 APP.onLock.push(() => { ST.logs = null; ST.survey = null; ST.text = ''; ST.editId = null; });
 
 /* ---------- 이름 찾기 (성 없이 "철수", 호칭도 인식) ---------- */
@@ -76,11 +77,62 @@ async function ensure() {
   if (ST.logs && ST.survey) return;
   const [lj, kv] = await Promise.all([api('logsLoad'), kvGet(['survey:main'])]);
   ST.logs = lj.logs;
-  ST.survey = kv['survey:main'] || { likes: {}, dislikes: {} };
+  ST.survey = await loadSurvey(kv['survey:main']);
+}
+/* 교우관계 조사: 'survey:main' = { v:2, rounds:[{id,name,date}] }, 'survey:r:<id>' = { 평가한학생: { 친구: 1~4 } } */
+async function loadSurvey(main) {
+  const sv = { main: { v: 2, rounds: [] }, data: {} };
+  if (main && main.v === 2) {
+    sv.main = main;
+    const keys = main.rounds.map((r) => 'survey:r:' + r.id);
+    if (keys.length) { const kv = await kvGet(keys); main.rounds.forEach((r) => { sv.data[r.id] = kv['survey:r:' + r.id] || {}; }); }
+  } else if (main && (main.likes || main.dislikes)) {
+    // 예전 방식(선호 3명·기피 2명)을 "좋음/싫음"으로 옮기기
+    const id = 'old', d = {};
+    const put = (a, b, v) => { if (!a || !b || Number(a) === Number(b)) return; (d[a] = d[a] || {})[b] = v; };
+    Object.entries(main.likes || {}).forEach(([a, arr]) => (arr || []).forEach((b) => put(a, b, 4)));
+    Object.entries(main.dislikes || {}).forEach(([a, arr]) => (arr || []).forEach((b) => put(a, b, 1)));
+    if (Object.keys(d).length) { sv.main.rounds.push({ id, name: '예전 조사', date: '' }); sv.data[id] = d; }
+  }
+  return sv;
+}
+const LEVELS = [[4, '좋음', '#2f6fed'], [3, '친해지고 싶음', '#22a06b'], [2, '그저 그럼', '#9aa3af'], [1, '싫음', '#e5484d']];
+const LV_SCORE = { 4: 2, 3: 1, 2: 0, 1: -2 };
+
+/* ---------- 사건 성격(긍정/부정) 판단 ---------- */
+const NEG_W = ['다투', '다퉜', '다툼', '싸우', '싸웠', '싸움', '때리', '때렸', '때림', '폭력', '욕을', '욕설', '욕하', '욕했', '놀리', '놀렸', '놀림', '따돌', '왕따', '괴롭', '밀치', '밀쳤', '밀쳐', '밀어서', '때려', '싸워', '다퉈', '놀려', '괴롭혀', '울었', '울음', '울어', '발로 차', '꼬집', '할퀴', '울렸', '울게', '무시', '갈등', '시비', '험담', '뒷담', '빼앗', '뺏', '훔치', '훔쳤', '거짓말', '싫어', '짜증', '화를 내', '화를 냈', '화냄', '화가 나', '소리를 지', '소리 지', '소리질', '위협', '협박', '다쳤', '다치게', '상처', '고자질', '이간', '방해', '비웃', '조롱', '삐졌', '삐짐', '토라', '절교', '외면', '배척', '끼워주지', '안 끼워', '소외', '학폭', '몸싸움', '말다툼', '언쟁', '신경전', '부딪', '탓을', '탓했', '째려', '노려', '침을 뱉', '던졌', '망가뜨', '찢었'];
+const POS_W = ['도와', '도왔', '도움', '협력', '협동', '함께 놀', '같이 놀', '사이좋', '사이가 좋', '칭찬', '배려', '양보', '나눠', '나누어', '위로', '친하', '친해', '친한', '즐겁', '즐거', '고마', '감사', '축하', '응원', '격려', '챙겨', '챙김', '화해', '사과하', '사과를', '사과했', '함께 하', '같이 하', '함께하', '같이하', '웃으며', '웃었', '재미있게', '손잡', '손을 잡', '단짝', '어울려', '어울림', '어울리', '놀아 주', '놀아주', '편지', '선물', '안아', '빌려주', '빌려 주', '가르쳐', '알려 주', '알려주', '돌봐', '돌봐줌', '감싸', '편들어', '같이 다니', '함께 다니'];
+const NEGATE = /^.{0,6}?(않|못|안 |없)/;
+function sentenceTone(t) {
+  let sc = 0;
+  const scan = (list, sign) => list.forEach((w) => {
+    let i = t.indexOf(w);
+    while (i !== -1) { const after = t.slice(i + w.length, i + w.length + 8); sc += NEGATE.test(after) ? -sign * 0.5 : sign; i = t.indexOf(w, i + w.length); }
+  });
+  scan(NEG_W, -1.2); scan(POS_W, 1);  // 부정적인 말을 조금 더 무겁게
+  return sc;
+}
+const TONE_OF = { '긍정': 1, '부정': -1, '중립': 0 };
+const toneName = (v) => (v > 0 ? '긍정' : v < 0 ? '부정' : '중립');
+/* 한 기록 → { tone: -1|0|1, auto: bool, pairs: Map('a-b' → -1~1) } */
+function analyzeLog(l, al) {
+  const sents = String(l.content).split(/(?<=[.!?。\n])|(?<=[가-힣][함음됨임다])\s+/).map((x) => x.trim()).filter(Boolean);
+  const per = sents.map((t) => ({ sc: sentenceTone(t), nums: findStudents(t, al).nums }));
+  const total = per.reduce((a, x) => a + x.sc, 0);
+  const manual = l.tone && l.tone in TONE_OF;
+  const tone = manual ? TONE_OF[l.tone] : Math.abs(total) < 0.5 ? 0 : Math.sign(total);
+  const pairs = new Map();
+  const put = (a, b, v) => { if (a === b || !v) return; const k = a < b ? a + '-' + b : b + '-' + a; const o = pairs.get(k) || 0; if (Math.abs(v) > Math.abs(o)) pairs.set(k, v); };
+  // 같은 문장에 함께 나온 학생: 그 문장의 성격(없으면 기록 전체 성격)
+  per.forEach((x) => { const t = manual ? tone : (Math.abs(x.sc) >= 0.5 ? Math.sign(x.sc) : tone); for (let i = 0; i < x.nums.length; i++) for (let j = i + 1; j < x.nums.length; j++) put(x.nums[i], x.nums[j], t); });
+  // 다른 문장에 따로 나온 학생: 기록 전체 성격의 절반
+  const all = l._nums || [];
+  for (let i = 0; i < all.length; i++) for (let j = i + 1; j < all.length; j++) put(all[i], all[j], tone * 0.5);
+  return { tone, auto: !manual, pairs };
 }
 function annotate() {
   const al = buildAliases();
-  ST.logs.forEach((l) => { const r = findStudents(l.content, al); l._nums = r.nums; l._spans = r.spans; l._amb = r.ambiguous; });
+  ST.logs.forEach((l) => { const r = findStudents(l.content, al); l._nums = r.nums; l._spans = r.spans; l._amb = r.ambiguous; const a = analyzeLog(l, al); l._tone = a.tone; l._auto = a.auto; l._pairs = a.pairs; });
 }
 const sortedLogs = (dir) => ST.logs.slice().sort((a, b) => (a.date === b.date ? a.created - b.created : a.date < b.date ? -1 : 1) * (dir === 'asc' ? 1 : -1));
 
@@ -118,6 +170,15 @@ function viewInput(redraw) {
     chips.replaceChildren(h('span', { class: 'muted' }, r.nums.length ? '인식된 학생:' : '인식된 학생이 없습니다'),
       ...r.nums.map((n) => h('span', { class: 'chip-s ' + APP.gcls(stuOf(n)?.gender) }, `${n} ${stuName(n)}`)));
     warn.textContent = r.ambiguous.length ? `※ "${r.ambiguous.join('", "')}"은(는) 이름이 같은 학생이 여러 명이라 모두 연결돼요. 성까지 쓰면 정확해요.` : '';
+    drawTone();
+  };
+  const toneRow = h('div', { class: 'row tone-row' });
+  const drawTone = () => {
+    const auto = toneName(analyzeLog({ content: ta.value, tone: '', _nums: [] }, al).tone);
+    toneRow.replaceChildren(h('span', { class: 'muted' }, '사건 성격'),
+      ...[['', `자동 (${auto})`], ['긍정', '긍정'], ['중립', '중립'], ['부정', '부정']].map(([v, n]) =>
+        h('button', { type: 'button', class: 'sm tone-btn' + (ST.tone === v ? ' on' : '') + (v ? ' t-' + v : ''), onclick: () => { ST.tone = v; drawTone(); } }, n)),
+      h('span', { class: 'muted', style: 'font-size:12px' }, '교우관계도에서 긍정적인 사건은 가까운 관계로, 부정적인 사건은 갈등 관계로 반영돼요.'));
   };
   const ta = h('textarea', { class: 'log-ta', placeholder: '예) 쉬는 시간에 철수와 영희가 블록을 두고 다퉜다. 서로 사과하고 화해함.', value: ST.text, oninput: (e) => { ST.text = e.target.value; upd(); } });
   const saveBtn = h('button', { class: 'primary', onclick: async () => {
@@ -126,12 +187,12 @@ function viewInput(redraw) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(ST.date)) return toast('날짜를 확인하세요', true);
     const r = findStudents(content, al);
     const old = ST.editId ? ST.logs.find((l) => l.id === ST.editId) : null;
-    const log = { id: old ? old.id : 'l' + Date.now().toString(36), date: ST.date, content, names: r.nums.map(stuName).join(', '), created: old ? old.created : Date.now() };
+    const log = { id: old ? old.id : 'l' + Date.now().toString(36), date: ST.date, content, names: r.nums.map(stuName).join(', '), created: old ? old.created : Date.now(), tone: ST.tone };
     saveBtn.disabled = true;
     try {
       await api('logSave', { log });
       if (old) Object.assign(old, log); else ST.logs.push(log);
-      ST.text = ''; ST.editId = null; toast('누가기록을 저장했습니다 (구글 시트에도 기록됨)'); redraw();
+      ST.text = ''; ST.editId = null; ST.tone = ''; toast('누가기록을 저장했습니다 (구글 시트에도 기록됨)'); redraw();
     } catch (e) { toast(errMsg(e), true); saveBtn.disabled = false; }
   } }, ST.editId ? '수정 저장' : '기록하기');
 
@@ -141,9 +202,9 @@ function viewInput(redraw) {
       h('div', { class: 'row gap' }, h('label', { class: 'muted' }, '날짜'), dateIn,
         h('button', { class: 'sm ghost', onclick: () => { ST.date = APP.today(); redraw(); } }, '오늘'),
         ST.editId ? h('span', { class: 'banner', style: 'margin:0;padding:4px 10px' }, '기록을 수정하는 중입니다') : null),
-      ta, chips, warn,
+      ta, chips, warn, toneRow,
       h('div', { class: 'row', style: 'margin-top:10px;justify-content:flex-end' },
-        ST.editId ? h('button', { onclick: () => { ST.editId = null; ST.text = ''; redraw(); } }, '수정 취소') : null, saveBtn)),
+        ST.editId ? h('button', { onclick: () => { ST.editId = null; ST.text = ''; ST.tone = ''; redraw(); } }, '수정 취소') : null, saveBtn)),
     h('div', { class: 'card' }, h('h3', null, `최근 기록 (${ST.logs.length}건 중 ${recent.length}건)`),
       recent.length ? recent.map((l) => logItem(l, '', redraw, true)) : h('div', { class: 'muted' }, '아직 기록이 없습니다.')),
     (upd(), null));
@@ -151,10 +212,11 @@ function viewInput(redraw) {
 function logItem(l, kw, redraw, editable) {
   return h('div', { class: 'log-item' },
     h('div', { class: 'row', style: 'justify-content:space-between' },
-      h('span', { class: 'log-date' }, l.date),
+      h('span', { class: 'row' }, h('span', { class: 'log-date' }, l.date),
+        h('span', { class: 'tone-badge t-' + toneName(l._tone), title: l._auto ? '자동 판단 (수정에서 바꿀 수 있어요)' : '선생님이 정한 성격' }, toneName(l._tone) + (l._auto ? '' : ' ✓'))),
       h('span', { class: 'row' }, (l._nums || []).map((n) => h('span', { class: 'chip-s ' + APP.gcls(stuOf(n)?.gender) }, `${n} ${stuName(n)}`)),
         editable ? [
-          h('button', { class: 'sm ghost', onclick: () => { ST.editId = l.id; ST.text = l.content; ST.date = l.date; ST.sub = 'input'; redraw(); window.scrollTo(0, 0); } }, '수정'),
+          h('button', { class: 'sm ghost', onclick: () => { ST.editId = l.id; ST.text = l.content; ST.date = l.date; ST.tone = l.tone || ''; ST.sub = 'input'; redraw(); window.scrollTo(0, 0); } }, '수정'),
           h('button', { class: 'sm ghost', onclick: async () => {
             if (!confirm('이 기록을 삭제할까요?')) return;
             try { await api('logDel', { id: l.id }); ST.logs = ST.logs.filter((x) => x.id !== l.id); redraw(); } catch (e) { toast(errMsg(e), true); }
@@ -196,30 +258,101 @@ function viewSearch(redraw) {
 function viewGraph(redraw) {
   const sub = h('div', { class: 'tabs' }, [['graph', '관계도 보기'], ['survey', '교우관계 조사 입력']].map(([id, n]) =>
     h('button', { class: 'tab sm' + (ST.gsub === id ? ' active' : ''), onclick: () => { ST.gsub = id; redraw(); } }, n)));
-  return h('div', null, sub, ST.gsub === 'survey' ? viewSurvey() : viewSociogram(redraw));
+  return h('div', null, sub, ST.gsub === 'survey' ? viewSurvey(redraw) : viewSociogram(redraw));
 }
 
-function viewSurvey() {
-  const sv = ST.survey; const roster = APP.roster();
-  const opts = () => [h('option', { value: '' }, '-'), ...roster.map((s) => h('option', { value: s.num }, `${s.num} ${s.name}`))];
-  const mk = (kind, num, i) => h('select', { value: (sv[kind][num] || [])[i] || '', onchange: (e) => {
-    const arr = (sv[kind][num] = sv[kind][num] || []); arr[i] = e.target.value ? Number(e.target.value) : null;
-    sv[kind][num] = arr.filter((x, j) => x != null || j < arr.length);
-  } }, opts());
-  const rows = roster.map((s) => h('tr', { class: APP.gcls(s.gender) },
-    h('td', { class: 'sv-name' }, `${s.num} ${s.name}`),
-    [0, 1, 2].map((i) => h('td', null, mk('likes', s.num, i))),
-    [0, 1].map((i) => h('td', null, mk('dislikes', s.num, i)))));
-  return h('div', { class: 'card' },
-    h('h3', null, '교우관계 조사 입력'),
-    h('div', { class: 'muted', style: 'margin-bottom:10px' }, '조사지 결과를 학생별로 옮겨 적어 주세요. 선호 친구는 최대 3명, 어려운 친구는 최대 2명입니다. (자기 자신은 선택하지 마세요)'),
-    h('div', { class: 'table-wrap' }, h('table', { class: 'roster survey' },
-      h('thead', null, h('tr', null, h('th', null, '학생'), h('th', null, '함께하고 싶은 친구 1'), h('th', null, '2'), h('th', null, '3'), h('th', null, '어려운 친구 1'), h('th', null, '2'))),
-      h('tbody', null, rows))),
-    h('div', { class: 'row', style: 'margin-top:12px;justify-content:flex-end' }, h('button', { class: 'primary', onclick: async () => {
-      ['likes', 'dislikes'].forEach((k) => Object.keys(sv[k]).forEach((n) => { sv[k][n] = [...new Set((sv[k][n] || []).filter((x) => x && x !== Number(n)))]; }));
-      try { await APP.kvSet('survey:main', sv); toast('조사 결과를 저장했습니다'); } catch (e) { toast(errMsg(e), true); }
-    } }, '저장')));
+/* 조사 저장 (조금 모았다가 한 번에) */
+let saveT = null, savePending = new Set();
+function saveSurveyLater(id) {
+  if (id) savePending.add(id);
+  clearTimeout(saveT);
+  saveT = setTimeout(flushSurvey, 900);
+}
+async function flushSurvey() {
+  clearTimeout(saveT); saveT = null;
+  const ids = [...savePending]; savePending.clear();
+  try {
+    await APP.kvSet('survey:main', ST.survey.main);
+    for (const id of ids) if (ST.survey.data[id]) await APP.kvSet('survey:r:' + id, ST.survey.data[id]);
+  } catch (e) { toast(errMsg(e), true); }
+}
+
+function viewSurvey(redraw) {
+  const sv = ST.survey, roster = APP.roster(), rounds = sv.main.rounds;
+  const box = h('div', { class: 'card' });
+  const addRound = () => {
+    const name = prompt('조사 이름을 입력하세요', `${rounds.length + 1}차 교우관계 조사`);
+    if (!name) return;
+    const r = { id: 'r' + Date.now().toString(36), name: name.trim().slice(0, 30), date: APP.today() };
+    rounds.push(r); sv.data[r.id] = {}; ST.svRound = r.id; ST.rater = roster[0] && roster[0].num;
+    saveSurveyLater(r.id); redraw();
+  };
+  if (!rounds.length) {
+    box.append(h('h3', null, '교우관계 조사 입력'),
+      h('div', { class: 'muted', style: 'margin-bottom:12px;line-height:1.7' }, '학생마다 자기 자신을 뺀 모든 친구를 "좋음 / 친해지고 싶음 / 그저 그럼 / 싫음" 4단계로 평가한 결과를 옮겨 적어요. 조사는 여러 번 할 수 있어요.'),
+      h('button', { class: 'primary', onclick: addRound }, '+ 첫 조사 만들기'));
+    return box;
+  }
+  if (!rounds.some((r) => r.id === ST.svRound)) ST.svRound = rounds[rounds.length - 1].id;
+  const round = rounds.find((r) => r.id === ST.svRound), data = sv.data[round.id] = sv.data[round.id] || {};
+  if (!roster.some((x) => x.num === ST.rater)) ST.rater = roster[0].num;
+  const done = (n) => roster.filter((f) => f.num !== n && (data[n] || {})[f.num]).length;
+  const need = roster.length - 1;
+  const fullCount = roster.filter((x) => done(x.num) >= need).length;
+
+  const roundSel = h('select', { onchange: (e) => { ST.svRound = e.target.value; redraw(); } },
+    rounds.map((r) => h('option', { value: r.id, selected: r.id === round.id }, r.name + (r.date ? ` (${r.date})` : ''))));
+  const head = h('div', { class: 'row', style: 'gap:8px;flex-wrap:wrap' },
+    h('b', null, '조사'), roundSel,
+    h('input', { type: 'date', value: round.date || '', title: '조사한 날짜', onchange: (e) => { round.date = e.target.value; saveSurveyLater(); } }),
+    h('button', { class: 'sm', onclick: () => { const n = prompt('조사 이름', round.name); if (n) { round.name = n.trim().slice(0, 30); saveSurveyLater(); redraw(); } } }, '이름 바꾸기'),
+    h('button', { class: 'sm', onclick: addRound }, '+ 새 조사'),
+    h('button', { class: 'sm ghost', onclick: async () => {
+      if (!confirm(`"${round.name}" 조사를 삭제할까요? 입력한 평가가 모두 지워져요.`)) return;
+      sv.main.rounds = rounds.filter((r) => r.id !== round.id); delete sv.data[round.id];
+      try { await APP.kvSet('survey:main', sv.main); await APP.kvDel('survey:r:' + round.id); } catch (e) { toast(errMsg(e), true); }
+      ST.svRound = null; redraw();
+    } }, '조사 삭제'));
+
+  const idx = roster.findIndex((x) => x.num === ST.rater), me = roster[idx];
+  const go = (d) => { const n = roster[(idx + d + roster.length) % roster.length]; ST.rater = n.num; redraw(); };
+  const raterSel = h('select', { onchange: (e) => { ST.rater = Number(e.target.value); redraw(); } },
+    roster.map((x) => h('option', { value: x.num, selected: x.num === ST.rater }, `${x.num} ${x.name}  ${done(x.num) >= need ? '✓' : done(x.num) ? `(${done(x.num)}/${need})` : ''}`)));
+  const nav = h('div', { class: 'row sv-nav' },
+    h('button', { class: 'sm', onclick: () => go(-1) }, '◀ 이전 학생'), raterSel, h('button', { class: 'sm', onclick: () => go(1) }, '다음 학생 ▶'),
+    h('span', { class: 'muted' }, `입력 완료 ${fullCount}/${roster.length}명`));
+
+  const mine = (data[me.num] = data[me.num] || {});
+  const rowsEl = [];
+  const setV = (f, v, rowEl) => {
+    if (mine[f.num] === v) delete mine[f.num]; else mine[f.num] = v;
+    rowEl.querySelectorAll('.lv').forEach((b) => b.classList.toggle('on', Number(b.dataset.v) === mine[f.num]));
+    cnt.textContent = `${done(me.num)}/${need}명 평가함`;
+    saveSurveyLater(round.id);
+  };
+  const friends = roster.filter((f) => f.num !== me.num);
+  friends.forEach((f, i) => {
+    const row = h('div', { class: 'sv-row ' + APP.gcls(f.gender), tabindex: 0 });
+    row.append(h('span', { class: 'sv-fname' }, `${f.num} ${f.name}`),
+      h('span', { class: 'lv-group' }, LEVELS.map(([v, n, c], k) => h('button', { type: 'button', tabindex: -1, class: 'lv' + (mine[f.num] === v ? ' on' : ''), 'data-v': v, style: `--c:${c}`, title: `키보드 ${k + 1}`, onclick: () => { setV(f, v, row); row.focus(); } }, `${k + 1} ${n}`))));
+    row.addEventListener('keydown', (e) => {
+      const k = Number(e.key);
+      if (k >= 1 && k <= 4) { e.preventDefault(); const v = LEVELS[k - 1][0]; mine[f.num] = undefined; setV(f, v, row); (rowsEl[i + 1] || row).focus(); }
+      else if (e.key === 'ArrowDown') { e.preventDefault(); (rowsEl[i + 1] || row).focus(); }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); (rowsEl[i - 1] || row).focus(); }
+      else if (e.key === 'Enter' && i === friends.length - 1) { e.preventDefault(); go(1); }
+    });
+    rowsEl.push(row);
+  });
+  const cnt = h('span', { class: 'muted' }, `${done(me.num)}/${need}명 평가함`);
+  box.append(h('h3', null, '교우관계 조사 입력'), head,
+    h('div', { class: 'muted', style: 'margin:10px 0;line-height:1.7' }, '평가한 학생을 고른 뒤, 친구마다 4단계 중 하나를 누르세요. 키보드 숫자 1~4로 입력하면 다음 친구로 넘어가요. (↑↓ 이동, 같은 칸을 다시 누르면 지워져요) 자동 저장돼요.'),
+    nav,
+    h('div', { class: 'row', style: 'justify-content:space-between;margin:10px 0 6px' }, h('b', null, `${me.num}번 ${me.name} 학생의 평가`), cnt,
+      h('button', { class: 'sm ghost', onclick: () => { friends.forEach((f) => { if (!mine[f.num]) mine[f.num] = 2; }); saveSurveyLater(round.id); redraw(); } }, '빈 칸 모두 "그저 그럼"')),
+    h('div', { class: 'sv-list' }, rowsEl));
+  setTimeout(() => { const first = rowsEl.find((r, i) => !mine[friends[i].num]) || rowsEl[0]; if (first && document.activeElement === document.body) first.focus({ preventScroll: true }); }, 0);
+  return box;
 }
 
 /* 힘 기반 배치 (Fruchterman–Reingold) */
@@ -251,91 +384,158 @@ function forceLayout(ids, edges, W, H) {
   return pos;
 }
 
+/* 관계 계산: 조사(방향 있음) + 누가기록(긍정/부정) */
+function computeRel() {
+  const roster = APP.roster(), ids = roster.map((s) => s.num), idset = new Set(ids);
+  const useS = ST.src.survey, useL = ST.src.log;
+  const rounds = ST.survey.main.rounds;
+  // 조사 점수 s(a→b): 고른 조사, 또는 전체(최근 조사일수록 비중 큼)
+  const chosen = ST.round === 'all' ? rounds.map((r, i) => ({ r, w: Math.pow(0.6, rounds.length - 1 - i) })) : rounds.filter((r) => r.id === ST.round).map((r) => ({ r, w: 1 }));
+  const sDir = new Map(); // 'a>b' → 점수(-2~2)
+  const lastLv = new Map(); // 'a>b' → 가장 최근 단계
+  if (useS) {
+    const acc = new Map();
+    chosen.forEach(({ r, w }) => { const d = ST.survey.data[r.id] || {}; Object.entries(d).forEach(([a, m]) => Object.entries(m || {}).forEach(([b, v]) => {
+      if (!LV_SCORE.hasOwnProperty(v) || !idset.has(Number(a)) || !idset.has(Number(b))) return;
+      const k = a + '>' + b, o = acc.get(k) || [0, 0]; o[0] += LV_SCORE[v] * w; o[1] += w; acc.set(k, o); lastLv.set(k, v);
+    })); });
+    acc.forEach(([sum, w], k) => sDir.set(k, sum / w));
+  }
+  // 누가기록 점수 L(a,b)
+  const L = new Map(), pos = {}, neg = {}, pairPN = new Map();
+  ids.forEach((i) => { pos[i] = 0; neg[i] = 0; });
+  if (useL) ST.logs.forEach((l) => {
+    (l._nums || []).forEach((n) => { if (l._tone > 0 && n in pos) pos[n]++; if (l._tone < 0 && n in neg) neg[n]++; });
+    (l._pairs || new Map()).forEach((v, k) => {
+      L.set(k, (L.get(k) || 0) + v);
+      const o = pairPN.get(k) || [0, 0]; if (v > 0) o[0]++; if (v < 0) o[1]++; pairPN.set(k, o);
+    });
+  });
+  const key = (a, b) => (a < b ? a + '-' + b : b + '-' + a);
+  const rel = (a, b) => {
+    const s1 = sDir.get(a + '>' + b), s2 = sDir.get(b + '>' + a);
+    const sv = s1 == null && s2 == null ? null : ((s1 ?? s2) + (s2 ?? s1)) / 2;
+    const lv = L.has(key(a, b)) ? 2 * Math.tanh(L.get(key(a, b)) / 1.5) : null;
+    if (sv != null && lv != null) return 0.6 * sv + 0.4 * lv;
+    return sv != null ? sv : lv;
+  };
+  const edges = [];
+  for (let i = 0; i < ids.length; i++) for (let j = i + 1; j < ids.length; j++) { const r = rel(ids[i], ids[j]); if (r != null && r !== 0) edges.push({ a: ids[i], b: ids[j], r }); }
+  return { ids, sDir, lastLv, L, pairPN, pos, neg, edges, rel, useS, useL, chosen };
+}
+
 function viewSociogram(redraw) {
   const roster = APP.roster(), W = 920, H = 600;
-  const ids = roster.map((s) => s.num);
-  // 사건 속 함께 언급 횟수
-  const co = new Map();
-  ST.logs.forEach((l) => { const ns = l._nums; for (let i = 0; i < ns.length; i++) for (let j = i + 1; j < ns.length; j++) { const key = ns[i] + '-' + ns[j]; co.set(key, (co.get(key) || 0) + 1); } });
-  const coEdges = [...co.entries()].map(([key, c]) => { const [a, b] = key.split('-').map(Number); return { a, b, w: c }; });
-  const likes = [], dislikes = [];
-  Object.entries(ST.survey.likes).forEach(([a, arr]) => (arr || []).forEach((b) => b && likes.push({ a: Number(a), b })));
-  Object.entries(ST.survey.dislikes).forEach(([a, arr]) => (arr || []).forEach((b) => b && dislikes.push({ a: Number(a), b })));
-  const likeSet = new Set(likes.map((e) => e.a + '>' + e.b));
-  const mutual = (e) => likeSet.has(e.b + '>' + e.a);
-
-  const visCo = ST.layers.co ? coEdges.filter((e) => e.w >= ST.minCo) : [];
-  const forceEdges = [...visCo, ...(ST.layers.like ? likes.map((e) => ({ ...e, w: mutual(e) ? 3 : 1 })) : [])]
-    .filter((e) => ids.includes(e.a) && ids.includes(e.b));
+  const R = computeRel(), ids = R.ids;
+  const thr = ST.thr;
+  const posE = R.edges.filter((e) => e.r >= thr), negE = R.edges.filter((e) => e.r <= -thr);
   // 연결된 학생은 가운데에 힘 배치, 연결 없는 학생은 아래쪽에 가지런히 놓기
-  const touched = new Set(); forceEdges.forEach((e) => { touched.add(e.a); touched.add(e.b); });
+  const forceEdges = posE.map((e) => ({ a: e.a, b: e.b, w: e.r * 1.5 }));
+  const touched = new Set(); [...posE, ...negE].forEach((e) => { touched.add(e.a); touched.add(e.b); });
   const conIds = ids.filter((i) => touched.has(i)), isoIds = ids.filter((i) => !touched.has(i));
   const perRow = Math.max(1, Math.floor((W - 40) / 58)), isoRows = Math.ceil(isoIds.length / perRow);
   const mainH = H - (isoRows ? isoRows * 56 + 24 : 0);
   const pos = conIds.length ? forceLayout(conIds, forceEdges, W, mainH) : {};
   isoIds.forEach((id, i) => { pos[id] = { x: 40 + (i % perRow) * 58, y: mainH + 30 + Math.floor(i / perRow) * 56 }; });
 
+  // 학생별 요약
+  const raters = new Set([...R.sDir.keys()].map((k) => Number(k.split('>')[0])));
+  const hasSurvey = R.useS && raters.size >= Math.ceil(ids.length / 2);
+  const st = {};
+  ids.forEach((n) => {
+    const rec = ids.filter((x) => x !== n && R.sDir.has(x + '>' + n)).map((x) => R.sDir.get(x + '>' + n));
+    const good = rec.filter((v) => v >= 1.5).length, bad = rec.filter((v) => v <= -1).length;
+    const mutual = ids.filter((x) => x !== n && (R.sDir.get(n + '>' + x) ?? -9) >= 1.5 && (R.sDir.get(x + '>' + n) ?? -9) >= 1.5).length;
+    const avg = rec.length ? rec.reduce((a, b) => a + b, 0) / rec.length : null;
+    const close = posE.filter((e) => e.a === n || e.b === n).length, conflict = negE.filter((e) => e.a === n || e.b === n).length;
+    const flags = [];
+    if (hasSurvey && rec.length) {
+      if (bad >= Math.max(3, Math.ceil(rec.length * 0.2))) flags.push('싫어하는 친구가 많음');
+      if (mutual === 0) flags.push('서로 좋아하는 친구 없음');
+      if (avg < 0) flags.push('전반적으로 평가가 낮음');
+    }
+    if (R.useL && R.neg[n] >= 3 && R.neg[n] > R.pos[n]) flags.push('갈등 사건이 잦음');
+    if ((hasSurvey || (R.useL && ST.logs.length >= 10)) && close === 0) flags.push('가까운 관계가 드러나지 않음');
+    st[n] = { avg, good, bad, mutual, close, conflict, flags };
+  });
+
   const NS = 'http://www.w3.org/2000/svg';
   const el = (tag, attrs, ...kids) => { const e = document.createElementNS(NS, tag); Object.entries(attrs || {}).forEach(([k, v]) => e.setAttribute(k, v)); kids.forEach((c) => e.append(c)); return e; };
   const svg = el('svg', { viewBox: `0 0 ${W} ${H}`, class: 'sg' });
-  const defs = el('defs', null,
-    ...[['ar-like', '#2f6fed'], ['ar-dis', '#e5484d']].map(([id, c]) => el('marker', { id, viewBox: '0 0 10 10', refX: 9, refY: 5, markerWidth: 7, markerHeight: 7, orient: 'auto-start-reverse' }, el('path', { d: 'M0,0 L10,5 L0,10 z', fill: c }))));
-  svg.append(defs);
   const sel = ST.sel;
-  const rel = (e) => sel == null || e.a === sel || e.b === sel;
+  const relOn = (e) => sel == null || e.a === sel || e.b === sel;
   const line = (e, attrs) => {
     const a = pos[e.a], b = pos[e.b]; if (!a || !b) return;
     const dx = b.x - a.x, dy = b.y - a.y, d = Math.hypot(dx, dy) || 1, r = 22;
-    svg.append(el('line', { x1: a.x + (dx / d) * r, y1: a.y + (dy / d) * r, x2: b.x - (dx / d) * (r + 2), y2: b.y - (dy / d) * (r + 2), opacity: rel(e) ? 1 : 0.12, ...attrs }));
+    svg.append(el('line', { x1: a.x + (dx / d) * r, y1: a.y + (dy / d) * r, x2: b.x - (dx / d) * r, y2: b.y - (dy / d) * r, opacity: relOn(e) ? 0.9 : 0.08, ...attrs }));
   };
-  visCo.forEach((e) => line(e, { stroke: '#9aa3af', 'stroke-width': 1 + Math.min(e.w, 6) * 1.2 }));
-  if (ST.layers.like) likes.forEach((e) => line(e, { stroke: '#2f6fed', 'stroke-width': mutual(e) ? 3 : 1.6, 'marker-end': 'url(#ar-like)' }));
-  if (ST.layers.dislike) dislikes.forEach((e) => line(e, { stroke: '#e5484d', 'stroke-width': 1.6, 'stroke-dasharray': '6 4', 'marker-end': 'url(#ar-dis)' }));
-
+  posE.forEach((e) => line(e, { stroke: '#2f6fed', 'stroke-width': 1 + Math.min(e.r, 2) * 1.6 }));
+  negE.forEach((e) => line(e, { stroke: '#e5484d', 'stroke-width': 1 + Math.min(-e.r, 2) * 1.4, 'stroke-dasharray': '6 4' }));
   const linked = new Set([sel]);
-  [...visCo, ...(ST.layers.like ? likes : []), ...(ST.layers.dislike ? dislikes : [])].forEach((e) => { if (e.a === sel) linked.add(e.b); if (e.b === sel) linked.add(e.a); });
+  [...posE, ...negE].forEach((e) => { if (e.a === sel) linked.add(e.b); if (e.b === sel) linked.add(e.a); });
   roster.forEach((s) => {
-    const p = pos[s.num];
+    const p = pos[s.num], flagged = st[s.num].flags.length > 0;
     const g = el('g', { class: 'sg-node', opacity: sel == null || linked.has(s.num) ? 1 : 0.25, style: 'cursor:pointer' },
-      el('circle', { cx: p.x, cy: p.y, r: 22, fill: s.gender === '남' ? '#bcd6ff' : s.gender === '여' ? '#fbc3d3' : '#e5e7eb', stroke: sel === s.num ? '#1f2937' : '#fff', 'stroke-width': sel === s.num ? 3 : 2 }),
+      el('circle', { cx: p.x, cy: p.y, r: 22, fill: s.gender === '남' ? '#bcd6ff' : s.gender === '여' ? '#fbc3d3' : '#e5e7eb', stroke: sel === s.num ? '#1f2937' : flagged ? '#f59e0b' : '#fff', 'stroke-width': sel === s.num || flagged ? 3 : 2 }),
       (() => { const t = el('text', { x: p.x, y: p.y + 4, 'text-anchor': 'middle', 'font-size': 12, 'font-weight': 600, fill: '#1f2937' }); t.textContent = s.name.length > 3 ? s.name.slice(0, 3) : s.name; return t; })(),
       (() => { const t = el('text', { x: p.x, y: p.y - 26, 'text-anchor': 'middle', 'font-size': 10, fill: '#6b7280' }); t.textContent = s.num; return t; })());
     g.addEventListener('click', () => { ST.sel = ST.sel === s.num ? null : s.num; redraw(); });
     svg.append(g);
   });
 
-  const cb = (key, label, color) => h('label', null, h('input', { type: 'checkbox', checked: ST.layers[key], onchange: (e) => { ST.layers[key] = e.target.checked; redraw(); } }), h('i', { class: 'dot', style: `background:${color}` }), label);
-  const controls = h('div', { class: 'card' }, h('div', { class: 'row radios' },
-    cb('co', '사건에서 함께 언급', '#9aa3af'), cb('like', '함께하고 싶은 친구(화살표)', '#2f6fed'), cb('dislike', '어려운 친구(점선)', '#e5484d'),
-    h('span', null, '언급 ', h('select', { value: String(ST.minCo), onchange: (e) => { ST.minCo = Number(e.target.value); redraw(); } },
-      [1, 2, 3, 4, 5].map((n) => h('option', { value: n }, `${n}회 이상`)))),
-  ), h('div', { class: 'muted', style: 'margin-top:6px' }, '동그라미를 누르면 그 학생과 연결된 관계만 진하게 보이고, 아래에 관련 사건이 나옵니다. 굵은 파란 화살표는 서로 선택한 관계입니다.'));
+  const src = (k, label) => h('label', null, h('input', { type: 'checkbox', checked: ST.src[k], onchange: (e) => { ST.src[k] = e.target.checked; redraw(); } }), label);
+  const rounds = ST.survey.main.rounds;
+  const controls = h('div', { class: 'card' },
+    h('div', { class: 'row radios', style: 'gap:14px;flex-wrap:wrap' },
+      h('b', null, '분석 기준'), src('log', '누가기록 기반으로 관계 파악하기'), src('survey', '교우관계 조사 기반으로 관계 파악하기')),
+    h('div', { class: 'row', style: 'gap:10px;flex-wrap:wrap;margin-top:8px' },
+      ST.src.survey ? h('span', null, '조사 ', h('select', { onchange: (e) => { ST.round = e.target.value; redraw(); } },
+        h('option', { value: 'all', selected: ST.round === 'all' }, rounds.length > 1 ? '전체 조사 (최근 조사에 더 비중)' : '전체 조사'),
+        rounds.map((r) => h('option', { value: r.id, selected: ST.round === r.id }, r.name)))) : null,
+      h('span', null, '표시할 관계 ', h('select', { onchange: (e) => { ST.thr = Number(e.target.value); redraw(); } },
+        [[1.5, '아주 강한 관계만'], [1, '뚜렷한 관계'], [0.5, '약한 관계까지']].map(([v, n]) => h('option', { value: v, selected: ST.thr === v }, n)))),
+      h('span', { class: 'legend' }, h('i', { class: 'ln', style: 'background:#2f6fed' }), '가까운 관계', h('i', { class: 'ln dash' }), '갈등·멀어진 관계', h('i', { class: 'dot', style: 'background:#fff;border:3px solid #f59e0b' }), '살펴볼 학생')),
+    h('div', { class: 'muted', style: 'margin-top:6px;line-height:1.6' },
+      !ST.src.log && !ST.src.survey ? '분석 기준을 하나 이상 골라 주세요.'
+        : '선이 굵을수록 관계가 강해요. 누가기록은 같은 사건에 나온 횟수가 아니라 사건의 성격(긍정·부정)으로 판단해요. 동그라미를 누르면 그 학생의 관계를 자세히 볼 수 있어요.'));
 
   // 분석표
-  const recv = {}, give = {}, mutN = {}, mention = {}, disRecv = {};
-  ids.forEach((i) => { recv[i] = 0; give[i] = 0; mutN[i] = 0; mention[i] = 0; disRecv[i] = 0; });
-  likes.forEach((e) => { if (e.a in give && e.b in recv) { give[e.a]++; recv[e.b]++; if (mutual(e)) mutN[e.a]++; } });
-  dislikes.forEach((e) => { if (e.b in disRecv) disRecv[e.b]++; });
-  ST.logs.forEach((l) => l._nums.forEach((n) => { if (n in mention) mention[n]++; }));
-  const surveyed = Object.values(ST.survey.likes).filter((a) => (a || []).some(Boolean)).length;
-  const hasSurvey = surveyed >= Math.ceil(ids.length / 2); // 절반 이상 입력해야 판단
-  const rows = roster.map((s) => {
-    const flag = hasSurvey && recv[s.num] === 0 ? '선택받지 못함' : (hasSurvey && mutN[s.num] === 0 ? '짝 관계 없음' : (disRecv[s.num] >= 2 ? '어려워하는 친구 많음' : ''));
-    return h('tr', { class: APP.gcls(s.gender) }, h('td', null, `${s.num} ${s.name}`), h('td', null, recv[s.num]), h('td', null, give[s.num]), h('td', null, mutN[s.num]), h('td', null, disRecv[s.num]), h('td', null, mention[s.num]),
-      h('td', null, flag ? h('b', { style: 'color:var(--danger)' }, flag) : ''));
+  const cols = ['학생'].concat(R.useS ? ['받은 평가 평균', '좋음 받음', '싫음 받음', '서로 좋음'] : [], R.useL ? ['긍정 사건', '부정 사건'] : [], ['가까운 관계', '갈등 관계', '살펴볼 점']);
+  const rows = roster.map((s) => { const x = st[s.num];
+    return h('tr', { class: APP.gcls(s.gender), style: 'cursor:pointer', onclick: () => { ST.sel = s.num; redraw(); window.scrollTo({ top: 0, behavior: 'smooth' }); } },
+      h('td', null, `${s.num} ${s.name}`),
+      R.useS ? [h('td', null, x.avg == null ? '-' : x.avg.toFixed(1)), h('td', null, x.good), h('td', null, x.bad), h('td', null, x.mutual)] : null,
+      R.useL ? [h('td', null, R.pos[s.num]), h('td', null, R.neg[s.num])] : null,
+      h('td', null, x.close), h('td', null, x.conflict),
+      h('td', { style: 'text-align:left' }, x.flags.length ? h('b', { style: 'color:var(--danger)' }, x.flags.join(', ')) : ''));
   });
   const table = h('div', { class: 'card' }, h('h3', null, '관계 요약'),
-    h('div', { class: 'table-wrap' }, h('table', { class: 'roster survey' }, h('thead', null, h('tr', null, ['학생', '받은 선택', '한 선택', '서로 선택', '기피 받음', '사건 언급', '살펴볼 점'].map((t) => h('th', null, t)))), h('tbody', null, rows))),
-    h('div', { class: 'muted', style: 'margin-top:6px' }, hasSurvey ? '표시는 참고용이에요. 판단은 선생님이 직접 해 주세요.' : '교우관계 조사를 절반 이상 입력하면 "살펴볼 점"이 표시돼요.'));
+    h('div', { class: 'table-wrap' }, h('table', { class: 'roster survey' }, h('thead', null, h('tr', null, cols.map((t) => h('th', null, t)))), h('tbody', null, rows))),
+    h('div', { class: 'muted', style: 'margin-top:6px;line-height:1.6' },
+      (R.useS ? '받은 평가 평균: 좋음 +2, 친해지고 싶음 +1, 그저 그럼 0, 싫음 -2. ' : '') +
+      (R.useS && !hasSurvey ? '조사를 절반 이상 입력하면 조사 기준 "살펴볼 점"이 표시돼요. ' : '') + '표시는 참고용이에요. 판단은 선생님이 직접 해 주세요.'));
 
-  // 선택한 학생의 사건
+  // 선택한 학생 자세히
   let detail = null;
-  if (sel != null) {
-    const evs = sortedLogs('desc').filter((l) => l._nums.includes(sel));
-    const names = (arr) => (arr.length ? arr.map(stuName).join(', ') : '없음');
+  if (sel != null && ids.includes(sel)) {
+    const lvName = (v) => (LEVELS.find((x) => x[0] === v) || [0, '-'])[1];
+    const lvTag = (v) => v ? h('span', { class: 'lv-tag', style: `--c:${LEVELS.find((x) => x[0] === v)[2]}` }, lvName(v)) : h('span', { class: 'muted' }, '-');
+    const others = roster.filter((f) => f.num !== sel).map((f) => ({ f, r: R.rel(sel, f.num) })).sort((a, b) => (b.r ?? -0.001) - (a.r ?? -0.001));
+    const k = (a, b) => (a < b ? a + '-' + b : b + '-' + a);
+    const relRows = others.filter((o) => o.r != null).map(({ f, r }) => { const pn = R.pairPN.get(k(sel, f.num)) || [0, 0];
+      return h('tr', { class: APP.gcls(f.gender) }, h('td', null, `${f.num} ${f.name}`),
+        R.useS ? [h('td', null, lvTag(R.lastLv.get(sel + '>' + f.num))), h('td', null, lvTag(R.lastLv.get(f.num + '>' + sel)))] : null,
+        R.useL ? [h('td', null, pn[0] || ''), h('td', null, pn[1] || '')] : null,
+        h('td', null, h('b', { style: `color:${r >= 0.5 ? '#2f6fed' : r <= -0.5 ? 'var(--danger)' : 'inherit'}` }, r >= 1.5 ? '아주 가까움' : r >= 0.5 ? '가까움' : r <= -1.5 ? '갈등 큼' : r <= -0.5 ? '갈등' : '보통')));
+    });
+    const evs = R.useL ? sortedLogs('desc').filter((l) => l._nums.includes(sel)) : [];
     detail = h('div', { class: 'card' }, h('h3', null, `${sel}번 ${stuName(sel)} 학생`),
-      h('div', { class: 'muted', style: 'margin-bottom:8px' }, `이 학생을 선택한 친구: ${names(likes.filter((e) => e.b === sel).map((e) => e.a))} / 이 학생이 선택한 친구: ${names(likes.filter((e) => e.a === sel).map((e) => e.b))}`),
-      evs.length ? evs.map((l) => logItem(l, '', redraw, false)) : h('div', { class: 'muted' }, '관련 사건이 없습니다.'));
+      st[sel].flags.length ? h('div', { class: 'banner warn', style: 'margin-bottom:8px' }, '살펴볼 점: ' + st[sel].flags.join(', ')) : null,
+      relRows.length ? h('div', { class: 'table-wrap' }, h('table', { class: 'roster survey' },
+        h('thead', null, h('tr', null, ['친구'].concat(R.useS ? ['이 학생이 준 평가', '친구에게 받은 평가'] : [], R.useL ? ['긍정 사건', '부정 사건'] : [], ['종합']).map((t) => h('th', null, t)))),
+        h('tbody', null, relRows))) : h('div', { class: 'muted' }, '드러난 관계가 없어요.'),
+      R.useS && R.chosen.length > 1 ? h('div', { class: 'muted', style: 'margin-top:4px' }, '평가는 가장 최근 조사 기준으로 보여 줘요.') : null,
+      evs.length ? [h('h3', { style: 'margin-top:14px' }, `관련 사건 ${evs.length}건`), evs.map((l) => logItem(l, '', redraw, false))] : null);
   }
   return h('div', null, controls, h('div', { class: 'card' }, svg), detail, table);
 }

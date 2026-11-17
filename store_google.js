@@ -64,7 +64,7 @@ const T = {
   boards: { name: '제출확인', headers: ['id', '제목', '잠금', '제출번호', '생성'], cols: 'E' },
   settings: { name: '설정', headers: ['key', 'value'], cols: 'B' },
   data: { name: '데이터', headers: ['key', 'value', 'updated'], cols: 'C' },
-  logs: { name: '누가기록', headers: ['id', '날짜', '내용', '등장학생', '기록시각'], cols: 'E' }
+  logs: { name: '누가기록', headers: ['id', '날짜', '내용', '등장학생', '기록시각', '사건 성격'], cols: 'F' }
 };
 const ROSTER_KEYS = ['num', 'name', 'gender', 'phone', 'birth', 'note', 'title', 'b1', 'b2', 'b3'];
 let ssId = '', sheetIds = {}, folderId = '', ready = null, chain = Promise.resolve();
@@ -106,10 +106,17 @@ async function readAll() {
   const j = await gj(`${SHEETS}/${ssId}/values:batchGet?${qs}&valueRenderOption=FORMATTED_VALUE`);
   keys.forEach((k, i) => { rows[k] = ((j.valueRanges[i] && j.valueRanges[i].values) || []).map((r) => Array.from({ length: T[k].headers.length }, (_, c) => (r[c] == null ? '' : String(r[c])))); });
 }
+/* 예전에 만든 시트에 새 머리글(예: 누가기록 '사건 성격')을 한 번만 채워 넣기 */
+async function fixHeaders() {
+  const flag = 'classapp_hdr2_' + ssId;
+  if (localStorage.getItem(flag)) return;
+  await gf(`${SHEETS}/${ssId}/values/${A(T.logs.name, 'A1')}?valueInputOption=RAW`, jsonOpt('PUT', { values: [T.logs.headers] }));
+  localStorage.setItem(flag, '1');
+}
 function ensure(fresh) {
   if (!hasToken()) return Promise.reject(new Error('AUTH'));
   const first = !ready;
-  if (first) ready = (async () => { await findOrCreate(); await ensureTabs(); await readAll(); })().catch((e) => { ready = null; throw e; });
+  if (first) ready = (async () => { await findOrCreate(); await ensureTabs(); await readAll(); await fixHeaders(); })().catch((e) => { ready = null; throw e; });
   return fresh && !first ? ready.then(() => readAll()) : ready;
 }
 
@@ -171,7 +178,7 @@ async function importDemo(db) {
   await replaceAll('roster', (db.roster || []).map((r) => ROSTER_KEYS.map((k) => (r[k] == null ? '' : String(r[k]).slice(0, 500)))));
   if (db.seat) await setSetting('seat', JSON.stringify(db.seat));
   for (const b of db.boards || []) await upsert('boards', 0, [String(b.id), String(b.title || ''), b.locked ? 'Y' : 'N', JSON.stringify(b.done || []), String(b.created || Date.now())]);
-  await replaceAll('logs', (db.logs || []).map((l) => [String(l.id), String(l.date), String(l.content || ''), String(l.names || ''), String(l.created || Date.now())]));
+  await replaceAll('logs', (db.logs || []).map((l) => [String(l.id), String(l.date), String(l.content || ''), String(l.names || ''), String(l.created || Date.now()), String(l.tone || '')]));
   const idMap = {};
   for (const [id, f] of Object.entries(db.files || {})) { try { idMap[id] = (await upload(f.data, f.mime, f.name)).fileId; } catch (e) { /* 파일 하나 실패해도 계속 */ } }
   const kv = Object.entries(db.kv || {}).map(([k, v]) => {
@@ -267,10 +274,10 @@ async function handle(action, d) {
       await upsert('data', 0, [key, v, String(Date.now())]); return { ok: true };
     }
     case 'kvDel': { const key = String(d.key || ''); if (isProt(key)) await checkPw(d.pw); await removeRow('data', 0, key); return { ok: true }; }
-    case 'logsLoad': await checkPw(d.pw); return { ok: true, logs: rows.logs.filter((r) => r[0] !== '').map((r) => ({ id: r[0], date: r[1], content: r[2], names: r[3], created: Number(r[4]) || 0 })) };
+    case 'logsLoad': await checkPw(d.pw); return { ok: true, logs: rows.logs.filter((r) => r[0] !== '').map((r) => ({ id: r[0], date: r[1], content: r[2], names: r[3], created: Number(r[4]) || 0, tone: r[5] || '' })) };
     case 'logSave': {
       await checkPw(d.pw); const l = d.log; if (!l || !l.id || !/^\d{4}-\d{2}-\d{2}$/.test(String(l.date))) throw new Error('BAD');
-      await upsert('logs', 0, [String(l.id), String(l.date), String(l.content || '').slice(0, 5000), String(l.names || '').slice(0, 500), String(l.created || Date.now())]); return { ok: true };
+      await upsert('logs', 0, [String(l.id), String(l.date), String(l.content || '').slice(0, 5000), String(l.names || '').slice(0, 500), String(l.created || Date.now()), String(l.tone || '')]); return { ok: true };
     }
     case 'logDel': await checkPw(d.pw); await removeRow('logs', 0, String(d.id)); return { ok: true };
     case 'writeTable': await checkPw(d.pw); await writeTable(d.name, d.rows); return { ok: true };
