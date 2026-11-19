@@ -65,6 +65,7 @@ const TABS = [
   { id: 'grade', name: '성적 관리', pw: true },
   { id: 'seat', name: '자리 관리' },
   { id: 'role', name: '역할 관리' },
+  { id: 'draw', name: '뽑기' },
   { id: 'submit', name: '제출확인' }
 ];
 
