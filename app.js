@@ -69,6 +69,30 @@ const TABS = [
   { id: 'submit', name: '제출확인' }
 ];
 
+/* ---------- 데이터 관리: 지울 수 있는 항목 ---------- */
+const CLEAR_ITEMS = [
+  ['roster', '학생 명렬표', '번호·이름·성별·연락처 등 명렬표 전체'],
+  ['logs', '학생 관리 - 누가기록', '입력한 누가기록 전체'],
+  ['survey', '학생 관리 - 교우관계 조사 입력', '모든 회차의 교우관계 조사 결과'],
+  ['perf', '성적 관리 - 수행평가 관리', '1·2학기 과목·평가기준과 입력한 점수'],
+  ['evals', '성적 관리 - 기타 평가 관리', '만든 평가와 입력한 점수·응답'],
+  ['seat', '자리 관리 - 저장된 자리', '저장해 둔 자리 배치 전체'],
+  ['role', '역할 관리 - 저장된 역할', '저장한 역할표 전체'],
+  ['roleForm', '역할 관리 - 역할 양식', '올려 둔 양식(PDF·사진) 파일과 칸 설정'],
+  ['manito', '뽑기 - 마니또 내역', '저장한 마니또 기록 전체']
+];
+function clearPlan(t) {
+  const prefixes = [];
+  if (t.has('survey')) prefixes.push('survey:');
+  if (t.has('perf')) prefixes.push('grade:perf:');
+  if (t.has('evals')) prefixes.push('grade:eval:');
+  if (t.has('seat')) prefixes.push('seat:layout:');
+  if (t.has('role')) prefixes.push('role:set:');
+  if (t.has('roleForm')) prefixes.push('role:form:');
+  if (t.has('manito')) prefixes.push('draw:manito');
+  return { prefixes, files: t.has('roleForm'), gradeCfg: t.has('perf') || t.has('evals') ? { perf: t.has('perf'), evals: t.has('evals') } : null };
+}
+
 /* ---------- API (서버 / 데모) ---------- */
 let loginResolve = null;
 async function api(action, data = {}) {
@@ -104,6 +128,14 @@ function demoApi(action, d) {
       else if (action === 'logSave') { chk(); const i = db.logs.findIndex((l) => l.id === d.log.id); if (i >= 0) db.logs[i] = d.log; else db.logs.push(d.log); }
       else if (action === 'logDel') { chk(); db.logs = db.logs.filter((l) => l.id !== d.id); }
       else if (action === 'writeTable') { chk(); }
+      else if (action === 'clearData') {
+        chk(); const t = new Set(d.targets || []), plan = clearPlan(t);
+        if (t.has('roster')) db.roster = [];
+        if (t.has('logs')) db.logs = [];
+        if (plan.files) Object.keys(db.kv).filter((k) => k.indexOf('role:form:') === 0).forEach((k) => { try { delete db.files[JSON.parse(db.kv[k].v).fileId]; } catch (e) { /* 없음 */ } });
+        Object.keys(db.kv).forEach((k) => { if (plan.prefixes.some((p) => k === p || k.indexOf(p) === 0)) delete db.kv[k]; });
+        if (plan.gradeCfg && db.kv['grade:cfg']) { const c = JSON.parse(db.kv['grade:cfg'].v); if (plan.gradeCfg.perf) c.perf = { '1': [], '2': [] }; if (plan.gradeCfg.evals) c.evals = []; db.kv['grade:cfg'].v = JSON.stringify(c); }
+      }
       else if (action === 'uploadFile') { const id = 'f' + Date.now().toString(36); db.files[id] = { data: d.data, mime: d.mime, name: d.name }; out = { ok: true, fileId: id }; }
       else if (action === 'getFile') { const f = db.files[d.fileId]; if (!f) throw new Error('FORBIDDEN'); out = { ok: true, ...f }; }
       else if (action === 'delFile') delete db.files[d.fileId];
@@ -250,12 +282,133 @@ setInterval(() => { if (S.unlocked && !S.rosterDirty && Date.now() - lastAct > 1
    학급 기초설정
    ===================================================== */
 function pageSetup() {
-  const subs = [['roster', '학생 명렬표'], ['seat', '학급 자리 배치'], ['pw', '비밀번호 변경']];
+  const subs = [['roster', '학생 명렬표'], ['seat', '학급 자리 배치'], ['pw', '비밀번호 변경'], ['data', '데이터 관리']];
   const wrap = h('div', null,
     S.defaultPw ? h('div', { class: 'banner warn' }, '초기 비밀번호(000000)를 사용 중입니다. "비밀번호 변경"에서 바꿔 주세요.') : null,
     h('div', { class: 'tabs' }, subs.map(([id, name]) => h('button', { class: 'tab' + (S.setupSub === id ? ' active' : ''), onclick: () => { S.setupSub = id; renderPage(); } }, name))));
-  wrap.append(S.setupSub === 'roster' ? rosterEditor() : S.setupSub === 'seat' ? seatEditor() : pwEditor());
+  wrap.append(S.setupSub === 'roster' ? rosterEditor() : S.setupSub === 'seat' ? seatEditor() : S.setupSub === 'data' ? dataEditor() : pwEditor());
   return wrap;
+}
+
+/* ---- 데이터 관리 ---- */
+/* 체크한 항목을 시트 목록 [{ name, rows }]으로 모으기 (백업용) */
+async function collectBackup(sel) {
+  const out = [], R = (S.roster || []).slice().sort((a, b) => a.num - b.num), nmOf = (n, names) => { const s = R.find((x) => Number(x.num) === Number(n)); return s ? s.name : (names && names[n]) || n + '번'; };
+  const kv1 = async (k) => (await APP.kvGet([k]))[k];
+  const kvAll = async (prefix) => { const ks = (await APP.kvList(prefix)).map((x) => x.key); return ks.length ? APP.kvGet(ks) : {}; };
+  if (sel.has('roster')) out.push({ name: '명렬표', rows: [FIELDS.map((f) => f[1]), ...R.map((r) => FIELDS.map(([k]) => (r[k] == null ? '' : r[k])))] });
+  if (sel.has('logs')) {
+    const logs = (await api('logsLoad')).logs.slice().sort((a, b) => (a.date === b.date ? a.created - b.created : a.date < b.date ? -1 : 1));
+    out.push({ name: '누가기록', rows: [['날짜', '내용', '등장 학생', '사건 성격'], ...logs.map((l) => [l.date, l.content, l.names, l.tone || '자동'])] });
+  }
+  if (sel.has('survey')) {
+    const main = await kv1('survey:main'), LV = { 4: '좋음', 3: '친해지고 싶음', 2: '그저 그럼', 1: '싫음' };
+    if (main && main.v === 2 && main.rounds.length) {
+      const vals = await APP.kvGet(main.rounds.map((r) => 'survey:r:' + r.id));
+      main.rounds.forEach((r) => { const d = vals['survey:r:' + r.id] || {};
+        out.push({ name: `교우관계_${r.name}`, rows: [[`${r.name} ${r.date || ''}`.trim() + ' (행: 평가한 학생, 열: 친구)', ...R.map((x) => x.name)], ...R.map((a) => [a.name, ...R.map((b) => (a.num === b.num ? '-' : LV[(d[a.num] || {})[b.num]] || ''))])] }); });
+    } else if (main && (main.likes || main.dislikes)) {
+      out.push({ name: '교우관계_예전 조사', rows: [['학생', '함께하고 싶은 친구', '어려운 친구'], ...R.map((a) => [a.name, ((main.likes || {})[a.num] || []).filter(Boolean).map((n) => nmOf(n)).join(', '), ((main.dislikes || {})[a.num] || []).filter(Boolean).map((n) => nmOf(n)).join(', ')])] });
+    }
+  }
+  if (sel.has('perf') || sel.has('evals')) {
+    const cfg = await kv1('grade:cfg');
+    if (cfg) {
+      const labels = cfg.labels || ['매우잘함', '잘함', '보통', '노력요함'], num = (v) => (v === '' || v == null || isNaN(Number(v)) ? '' : Number(v));
+      if (sel.has('perf')) for (const sem of ['1', '2']) for (const sb of (cfg.perf || {})[sem] || []) {
+        const d = (await kv1(`grade:perf:${sem}:${sb.id}`)) || { scores: {} }, sc = (n, it) => num(d.scores && d.scores[n] && d.scores[n][it.id]);
+        const band = (it, v) => (v === '' ? '' : labels[v >= it.cuts[0] ? 0 : v >= it.cuts[1] ? 1 : v >= it.cuts[2] ? 2 : 3]);
+        out.push({ name: `수행_${sem}학기_${sb.name || '과목'}`, rows: [['번호', '이름', ...sb.items.map((i) => `${i.name}(${i.max}점)`), ...sb.items.map((i) => `${i.name} 평어`)],
+          ...R.map((s) => [s.num, s.name, ...sb.items.map((it) => sc(s.num, it)), ...sb.items.map((it) => band(it, sc(s.num, it)))]),
+          [], ['기준 점수', '', ...sb.items.map((it) => labels.slice(0, 3).map((l, k) => `${l} ${it.cuts[k]}`).join(' / '))]] });
+      }
+      if (sel.has('evals')) for (const ev of cfg.evals || []) {
+        const d = (await kv1('grade:eval:' + ev.id)) || {}, norm = (v) => String(v == null ? '' : v).trim().toLowerCase();
+        if (ev.type === 'answers') {
+          const max = ev.items.reduce((a, i) => a + (Number(i.pts) || 0), 0);
+          out.push({ name: `기타_${ev.name}`, rows: [['번호', '이름', ...ev.items.map((_, i) => `${i + 1}번`), `총점(${max}점)`], ['', '정답', ...ev.items.map((i) => i.ans), ''],
+            ...R.map((s) => { const r = (d.answers || {})[s.num] || []; const has = r.some((x) => norm(x) !== ''); return [s.num, s.name, ...ev.items.map((_, i) => r[i] || ''), has ? ev.items.reduce((a, it, i) => a + (norm(r[i]) !== '' && norm(r[i]) === norm(it.ans) ? Number(it.pts) || 0 : 0), 0) : '']; })] });
+        } else out.push({ name: `기타_${ev.name}`, rows: [['번호', '이름', `점수(${ev.max}점)`, ev.cut != null ? `기준 ${ev.cut}점 도달` : ''], ...R.map((s) => { const v = num((d.scores || {})[s.num]); return [s.num, s.name, v, ev.cut != null && v !== '' ? (v >= ev.cut ? '도달' : '미도달') : '']; })] });
+      }
+    }
+  }
+  if (sel.has('seat')) {
+    const vals = await kvAll('seat:layout:');
+    Object.values(vals).filter(Boolean).sort((a, b) => (a.savedAt || 0) - (b.savedAt || 0)).forEach((l) => {
+      const rows = [[`${l.name} (위쪽이 칠판)`]], cn = l.colNames || [];
+      if (cn.some(Boolean)) rows.push(Array.from({ length: l.cols }, (_, c) => cn[c] || ''));
+      for (let r = 0; r < l.rows; r++) rows.push(Array.from({ length: l.cols }, (_, c) => { const i = r * l.cols + c, n = l.assign ? l.assign[i] : null; return l.cells[i] && n != null ? nmOf(n) : ''; }));
+      if ((l.teams || []).length) { rows.push([], ['모둠', '구성원']); l.teams.forEach((t) => rows.push([t.name, t.cells.map((i) => (l.assign && l.assign[i] != null ? nmOf(l.assign[i]) : '')).filter(Boolean).join(', ')])); }
+      out.push({ name: `자리_${l.name}`, rows });
+    });
+  }
+  if (sel.has('role')) {
+    const vals = await kvAll('role:set:'), rows = [['역할표', '양식', '줄', '역할명', '역할 설명', '담당자']];
+    Object.values(vals).filter(Boolean).sort((a, b) => (a.savedAt || 0) - (b.savedAt || 0)).forEach((st) => (st.roles || []).forEach((r, i) => { if (r.name || r.desc || r.owner) rows.push([st.name, st.form || '', i + 1, r.name || '', r.desc || '', r.owner || '']); }));
+    if (rows.length > 1) out.push({ name: '역할표', rows });
+  }
+  if (sel.has('roleForm')) {
+    const vals = await kvAll('role:form:'), rows = [['양식 이름', '쪽 수', '입력 칸 수', '저장한 날짜']];
+    Object.values(vals).filter(Boolean).forEach((f) => rows.push([f.name, f.pageCount || 1, (f.fields || []).length, f.savedAt ? new Date(f.savedAt).toLocaleDateString('ko-KR') : '']));
+    if (rows.length > 1) { rows.push([], ['※ 양식 파일(PDF·사진)은 구글 드라이브의 "학급관리_파일" 폴더에 있어요.']); out.push({ name: '역할 양식 목록', rows }); }
+  }
+  if (sel.has('manito')) {
+    const hist = (await kv1('draw:manito')) || [];
+    if (hist.length) {
+      const rows = [['회차', '날짜', '번호', '학생', '마니또']];
+      hist.slice().sort((a, b) => (a.created || 0) - (b.created || 0)).forEach((m) => Object.entries(m.pairs || {}).sort((a, b) => a[0] - b[0]).forEach(([g, t]) => rows.push([m.name, m.date || '', Number(g), nmOf(g, m.names), nmOf(t, m.names)])));
+      out.push({ name: '마니또 내역', rows });
+    }
+  }
+  return out.filter((x) => x.rows.length > 1);
+}
+
+const clearSel = new Set();
+function dataEditor() {
+  const box = h('div', { class: 'card', style: 'max-width:760px' });
+  const draw = () => {
+    const btn = h('button', { class: 'danger', disabled: !clearSel.size, onclick: run }, clearSel.size ? `선택한 ${clearSel.size}개 삭제` : '삭제');
+    const bk = h('button', { class: 'primary', disabled: !clearSel.size, onclick: backup }, clearSel.size ? `선택한 ${clearSel.size}개 백업` : '백업');
+    box.replaceChildren(h('h3', null, '데이터 관리'),
+      h('div', { class: 'muted', style: 'margin-bottom:12px;line-height:1.6' }, '데이터를 체크한 뒤 백업 또는 삭제를 누르세요. 백업은 지금 로그인한 구글 계정의 드라이브에 새 스프레드시트로 저장돼요. 삭제한 데이터는 되살릴 수 없으니 먼저 백업해 두세요.'),
+      h('label', { class: 'clear-row all' }, h('input', { type: 'checkbox', checked: clearSel.size === CLEAR_ITEMS.length, onchange: (e) => { CLEAR_ITEMS.forEach(([k]) => (e.target.checked ? clearSel.add(k) : clearSel.delete(k))); draw(); } }), h('b', null, '전체 선택')),
+      ...CLEAR_ITEMS.map(([k, n, desc]) => h('label', { class: 'clear-row' + (clearSel.has(k) ? ' on' : '') },
+        h('input', { type: 'checkbox', checked: clearSel.has(k), onchange: (e) => { e.target.checked ? clearSel.add(k) : clearSel.delete(k); draw(); } }),
+        h('span', null, h('b', null, n), h('span', { class: 'muted' }, ' · ' + desc)))),
+      h('div', { class: 'row', style: 'justify-content:flex-end;margin-top:14px;gap:8px' }, bkMsg, h('div', { style: 'flex:1' }), bk, btn));
+  };
+  const bkMsg = h('div', { class: 'muted' });
+  async function backup() {
+    box.querySelectorAll('button').forEach((b) => { b.disabled = true; }); bkMsg.textContent = '데이터를 모으는 중…';
+    try {
+      const sheets = await collectBackup(clearSel);
+      if (!sheets.length) { toast('백업할 데이터가 없어요', true); return; }
+      const title = `학급관리 백업 ${APP.today()}`;
+      if (DEMO) { APP.xl.saveBlob(APP.xl.buildXlsx(sheets), title + '.xlsx'); bkMsg.textContent = '데모 모드라서 엑셀 파일로 내려받았어요.'; }
+      else {
+        bkMsg.textContent = '스프레드시트를 만드는 중…';
+        const j = await api('exportSheet', { title, sheets });
+        bkMsg.replaceChildren(`드라이브에 "${title}"을(를) 만들었어요 (시트 ${sheets.length}개). `, h('a', { href: j.url, target: '_blank', rel: 'noopener' }, '열기'));
+      }
+      toast('백업했어요');
+    } catch (e) { bkMsg.textContent = ''; toast(errMsg(e), true); }
+    finally { box.querySelectorAll('button').forEach((b) => { b.disabled = false; }); if (!clearSel.size) draw(); }
+  }
+  async function run() {
+    const names = CLEAR_ITEMS.filter(([k]) => clearSel.has(k)).map(([, n]) => '· ' + n).join('\n');
+    const typed = prompt(`아래 데이터를 삭제할까요? 되살릴 수 없어요.\n\n${names}\n\n계속하려면 "삭제"라고 입력하세요.`);
+    if (typed == null) return;
+    if (typed.trim() !== '삭제') return toast('"삭제"라고 입력해야 지워져요', true);
+    box.querySelectorAll('button').forEach((b) => { b.disabled = true; });
+    try {
+      await api('clearData', { targets: [...clearSel] });
+      if (clearSel.has('roster')) { S.roster = []; S.rosterDraft = null; S.rosterDirty = false; }
+      APP.onLock.forEach((f) => f()); APP.onClear.forEach((f) => f());
+      toast('선택한 데이터를 삭제했어요'); clearSel.clear(); draw();
+    } catch (e) { toast(errMsg(e), true); draw(); }
+  }
+  draw();
+  return box;
 }
 
 /* ---- 명렬표 ---- */
@@ -689,7 +842,7 @@ async function kvGet(keys) {
 }
 const APP = window.APP = {
   S, h, $, api, toast, errMsg, clone, byNum, ERR, gcls, DEMO,
-  pages: {}, onLock: [],
+  pages: {}, onLock: [], onClear: [], clearPlan,
   renderPage: () => renderPage(),
   kvGet, kvSet: (key, obj) => api('kvSet', { key, value: JSON.stringify(obj) }),
   kvList: async (prefix) => (await api('kvList', { prefix })).keys,

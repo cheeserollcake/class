@@ -5,6 +5,7 @@ const APP = window.APP;
 const { S, h, toast, errMsg } = APP;
 
 const RO = { forms: null, sets: null, form: null, pages: null, pending: null, mode: 'fill', sel: null, roles: [{ name: '', desc: '', owner: '' }], setName: '', formName: '', busy: '' };
+APP.onClear.push(() => { RO.forms = null; RO.sets = null; RO.form = null; RO.pages = null; RO.pending = null; RO.roles = [{ name: '', desc: '', owner: '' }]; RO.setName = ''; });
 const KINDS = [['name', '역할명'], ['desc', '역할 설명'], ['owner', '담당자'], ['none', '사용 안 함']];
 const KCOLOR = { name: '#2f6fed', desc: '#1baf7a', owner: '#eb6834', none: '#9aa3af' };
 

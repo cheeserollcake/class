@@ -12,6 +12,8 @@ const D = {
   cfg: null, hist: null
 };
 
+APP.onClear.push(() => { D.cfg = null; D.hist = null; D.mani.res = null; D.step.mani = 'cfg'; });
+
 /* ---------- 공통 ---------- */
 const roster = () => APP.roster();
 const stu = (n) => roster().find((s) => s.num === n);
@@ -30,6 +32,32 @@ async function ensure() {
 }
 let cfgT = null;
 const saveCfgLater = () => { clearTimeout(cfgT); cfgT = setTimeout(() => APP.kvSet('draw:cfg', D.cfg).catch((e) => toast(errMsg(e), true)), 700); };
+
+/* ---------- 화면 꽉 채우기 (데스크톱) ---------- */
+const isDesk = () => innerWidth >= 900;
+let relayout = null;
+window.addEventListener('resize', () => { if (relayout) relayout(); });
+/* n개 칸을 W×H에 배치할 때 글자가 가장 크게 들어가는 열 수 찾기 */
+function fitCells(n, W, H, gap, score) {
+  let best = null;
+  for (let c = 1; c <= n; c++) {
+    const r = Math.ceil(n / c), cw = (W - gap * (c - 1)) / c, ch = (H - gap * (r - 1)) / r;
+    if (cw <= 0 || ch <= 0) continue;
+    const f = score(cw, ch);
+    if (!best || f > best.f + 0.01) best = { c, r, cw, ch, f };
+  }
+  return best || { c: 1, r: n, cw: W, ch: 60, f: 16 };
+}
+const maxLen = (arr) => Math.max(2, ...arr.map((x) => [...String(x)].length));
+/* 무대(stage)를 화면 아래 끝까지 늘리고, 안쪽 grid의 크기를 돌려줌 */
+function stretch(stage, grid) {
+  if (!isDesk()) { stage.style.height = ''; return null; }
+  const top = stage.getBoundingClientRect().top + window.scrollY - window.scrollY;
+  stage.style.height = Math.max(360, innerHeight - top - 16) + 'px';
+  const over = document.documentElement.scrollHeight - innerHeight;   // 아래 여백 때문에 넘치면 그만큼 줄이기
+  if (over > 0) stage.style.height = Math.max(360, parseFloat(stage.style.height) - over) + 'px';
+  return { W: grid.clientWidth, H: grid.clientHeight };
+}
 
 /* ---------- 소리 (Web Audio로 직접 만들기) ---------- */
 let ac = null;
@@ -122,6 +150,7 @@ APP.pages.draw = () => {
   const draw = () => {
     body.replaceChildren(); document.querySelectorAll('.confetti').forEach((c) => c.remove());
     if (!roster().length) return body.append(h('div', { class: 'card placeholder' }, '먼저 학급 기초설정에서 명렬표를 입력해 주세요.'));
+    if (!D.cfg || !D.hist) return body.append(APP.loading());   // 아직 불러오는 중
     body.append(D.sub === 'pick' ? viewPick(draw) : D.sub === 'team' ? viewTeam(draw) : viewMani(draw));
   };
   wrap.append(tabs, body); drawTabs(); body.append(APP.loading());
@@ -158,7 +187,6 @@ function viewPick(redraw) {
     h('div', { class: 'row', style: 'justify-content:space-between;margin-top:14px' }, soundBox(),
       h('button', { class: 'primary big', disabled: !pool.length, onclick: () => { actx(); D.step.pick = 'run'; redraw(); } }, pool.length ? '확인' : '뽑을 학생이 없어요')));
 }
-const slotSize = (n) => (n === 1 ? 'xl' : n <= 3 ? 'l' : n <= 8 ? 'm' : n <= 16 ? 's' : 'xs');
 function pickRun(redraw) {
   const P = D.pick, pool = pickPool(), n = Math.min(P.n, pool.length);
   const result = shuffle(pool).slice(0, n);
@@ -166,15 +194,30 @@ function pickRun(redraw) {
   const gName = { all: '전체', m: '남자만', f: '여자만' }[P.g];
   const stage = h('div', { class: 'draw-stage' });
   const title = h('div', { class: 'draw-title' }, '두근두근…');
-  const grid = h('div', { class: 'slot-grid sz-' + slotSize(n) });
+  const grid = h('div', { class: 'slot-grid' });
   const slots = result.map(() => { const el = h('div', { class: 'slot spin' }, h('span', null, '?')); grid.append(el); return el; });
   const again = h('button', { class: 'primary', disabled: true, onclick: () => { actx(); redraw(); } }, '다시 뽑기');
   stage.append(title, grid);
+  const L = maxLen(pool.map((x) => x.name));
+  relayout = () => {
+    if (!alive(stage)) return;
+    const box = stretch(stage, grid), gap = 14;
+    let f;
+    if (box) {
+      const b = fitCells(n, box.W, box.H, gap, (cw, ch) => Math.min(ch * 0.42, cw / (L + 0.8), 240));
+      grid.style.gridTemplateColumns = `repeat(${b.c}, 1fr)`; grid.style.gridTemplateRows = `repeat(${b.r}, 1fr)`; f = b.f;
+    } else {
+      const c = Math.min(n, innerWidth < 500 ? 2 : 3), ch = n === 1 ? 180 : 100;
+      grid.style.gridTemplateColumns = `repeat(${c}, 1fr)`; grid.style.gridTemplateRows = `repeat(${Math.ceil(n / c)}, ${ch}px)`;
+      f = Math.min(ch * 0.42, (grid.clientWidth / c) / (L + 0.8));
+    }
+    grid.style.setProperty('--fs', Math.max(14, Math.floor(f)) + 'px');
+  };
   const bar = h('div', { class: 'row draw-bar' }, h('b', null, `${n}명 뽑기 · ${gName}`), P.noRepeat ? h('span', { class: 'muted' }, `남은 학생 ${pool.length - n}명`) : null,
     h('div', { style: 'flex:1' }), soundBox(), again, h('button', { onclick: () => { D.step.pick = 'cfg'; redraw(); } }, '조건 바꾸기'));
   // 애니메이션
   (async () => {
-    await wait(60);
+    await wait(30); relayout();
     const gap = Math.min(650, 3000 / n), base = 1800, total = base + gap * (n - 1);
     SND.roll(total / 1000 + 0.2);
     const t0 = performance.now();
@@ -269,22 +312,42 @@ function teamRun(redraw) {
   const Tm = D.team, res = makeTeams(Tm.n, Tm.mode, D.cfg.teamAvoid), all = roster();
   const stage = h('div', { class: 'draw-stage team' });
   const title = h('div', { class: 'draw-title' }, '팀을 섞는 중…');
-  const grid = h('div', { class: 'team-grid' + (res.teams.length > 6 ? ' many' : '') });
+  const grid = h('div', { class: 'team-grid' });
   const cells = [];
   res.teams.forEach((t, i) => {
     const mc = t.filter((s) => s.gender === '남').length, fc = t.filter((s) => s.gender === '여').length;
     const card = h('div', { class: 'team-card spin' },
-      h('div', { class: 'team-head' }, h('b', null, `${i + 1}팀`), h('span', { class: 'team-meta' }, `${t.length}명 · 남${mc} 여${fc}`)),
+      h('div', { class: 'team-head' }, h('b', { class: 'team-no' }, `${i + 1}팀`), h('span', { class: 'team-meta' }, `${t.length}명 · 남${mc} 여${fc}`)),
       h('div', { class: 'team-mem' }, t.map((s) => { const el = h('span', { class: 'mem' }, '?'); cells.push({ el, s }); return el; })));
     grid.append(card);
   });
   const again = h('button', { class: 'primary', disabled: true, onclick: () => { actx(); redraw(); } }, '다시 구성');
   const note = h('div');
   stage.append(title, grid, note);
+  const T = res.teams.length, M = Math.max(1, ...res.teams.map((t) => t.length)), L = maxLen(all.map((x) => x.name));
+  relayout = () => {
+    if (!alive(stage)) return;
+    const box = stretch(stage, grid), gap = 14;
+    // 팀 카드 배치 × 카드 안 이름 배치를 함께 고르기
+    const inner = (cw, ch) => {
+      const head = Math.min(56, Math.max(30, ch * 0.16)), mw = cw - 24, mh = ch - head - 24;
+      let bestM = { mc: 1, f: 0 };
+      for (let mc = 1; mc <= M; mc++) { const mr = Math.ceil(M / mc), w = (mw - 6 * (mc - 1)) / mc, hh = (mh - 6 * (mr - 1)) / mr; if (w <= 0 || hh <= 0) continue; const f = Math.min(hh * 0.5, w / (L + 1), 64); if (f > bestM.f + 0.01) bestM = { mc, f, head }; }
+      return bestM;
+    };
+    if (box) {
+      const b = fitCells(T, box.W, box.H - (note.offsetHeight || 0), gap, (cw, ch) => inner(cw, ch).f);
+      const m = inner(b.cw, b.ch);
+      grid.style.gridTemplateColumns = `repeat(${b.c}, 1fr)`; grid.style.gridTemplateRows = `repeat(${b.r}, 1fr)`;
+      grid.style.setProperty('--mc', m.mc); grid.style.setProperty('--mr', Math.ceil(M / m.mc)); grid.style.setProperty('--fs', Math.max(13, Math.floor(m.f)) + 'px'); grid.style.setProperty('--hd', Math.floor(m.head * 0.55) + 'px');
+    } else {
+      grid.style.gridTemplateColumns = ''; grid.style.gridTemplateRows = ''; grid.style.setProperty('--mc', 2); grid.style.setProperty('--fs', '17px'); grid.style.setProperty('--hd', '20px');
+    }
+  };
   const mname = { none: '성별 고려 안 함', equal: '성비 동등하게', sep: '남녀 따로' }[Tm.mode];
   const bar = h('div', { class: 'row draw-bar' }, h('b', null, `${Tm.n}팀 · ${mname}`), h('div', { style: 'flex:1' }), soundBox(), again, h('button', { onclick: () => { D.step.team = 'cfg'; redraw(); } }, '조건 바꾸기'));
   (async () => {
-    await wait(60);
+    await wait(30); relayout();
     const dur = 2600; SND.roll(dur / 1000); const t0 = performance.now();
     const spin = () => {
       if (!alive(grid)) return;
@@ -296,7 +359,7 @@ function teamRun(redraw) {
         const msgs = [];
         if (res.note) msgs.push(res.note);
         if (res.broken.length) msgs.push(`기피 설정을 모두 지킬 수 없어 일부를 무시했어요: ${res.broken.map(([a, b]) => `${nm(a)}↔${nm(b)}`).join(', ')}`);
-        if (msgs.length) note.replaceChildren(h('div', { class: 'banner warn', style: 'margin-top:14px' }, msgs.join(' ')));
+        if (msgs.length) { note.replaceChildren(h('div', { class: 'banner warn', style: 'margin:12px 0 0' }, msgs.join(' '))); relayout(); }
         return;
       }
       cells.forEach(({ el }) => { el.textContent = pickOne(all).name; });
@@ -423,7 +486,17 @@ function maniRun(redraw) {
   if (R.broken && R.broken.length) msgs.push(`기피 설정을 모두 지킬 수 없어 ${R.broken.length}쌍은 무시했어요.`);
   if (R.repeats) msgs.push(`예전 마니또와 겹친 학생이 ${R.repeats}명 있어요. (모두 피할 수 없었어요)`);
   const grid = h('div', { class: 'mani-grid' });
-  const seen = new Set(R.seen);
+  const seen = new Set(R.seen), L = maxLen(all.map((x) => x.name));
+  relayout = () => {
+    if (!alive(grid)) return;
+    if (!isDesk()) { grid.style.cssText = ''; return; }
+    const top = grid.getBoundingClientRect().top, H = Math.max(300, innerHeight - top - 16), W = grid.clientWidth;
+    const b = fitCells(all.length, W, H, 10, (cw, ch) => Math.min(ch * 0.36, cw / (L + 1), 72));
+    grid.style.cssText = `height:${H}px;grid-template-columns:repeat(${b.c},1fr);grid-template-rows:repeat(${b.r},1fr);--fs:${Math.max(14, Math.floor(b.f))}px`;
+    const over = document.documentElement.scrollHeight - innerHeight;
+    if (over > 0) grid.style.height = Math.max(300, H - over) + 'px';
+  };
+  setTimeout(relayout, 30);
   all.forEach((s) => {
     const card = h('button', { class: 'mani-card ' + gcls(s.gender) + (seen.has(s.num) ? ' seen' : ''), onclick: () => reveal(card, s) }, h('span', { class: 'mn' }, s.num), h('b', null, s.name));
     grid.append(card);

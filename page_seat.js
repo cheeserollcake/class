@@ -5,6 +5,7 @@ const APP = window.APP;
 const { S, h, toast, errMsg, clone } = APP;
 
 const SE = { names: null, cur: null, sel: null, token: 0, sound: false, busy: false, loadedName: '' };
+APP.onClear.push(() => { SE.names = null; SE.cur = null; SE.loadedName = ''; });
 let audio = null;
 function thump(v) {
   if (!SE.sound) return;

@@ -210,11 +210,11 @@ async function upload(b64, mime, name) {
 
 /* ---------------- 내보내기 (새 스프레드시트) ---------------- */
 async function exportSheet(title, sheets) {
-  sheets = (sheets || []).slice(0, 40); const used = {}, names = sheets.map((s) => {
+  sheets = (sheets || []).slice(0, 150); const used = {}, names = sheets.map((s) => {
     let n = String(s.name || '시트').replace(/[\[\]*?:/\\]/g, ' ').trim().slice(0, 90) || '시트', b = n, k = 2; while (used[n]) n = b.slice(0, 85) + ' ' + k++; used[n] = 1; return n;
   });
   const c = await gj(SHEETS, jsonOpt('POST', { properties: { title: String(title || '학급관리 내보내기').slice(0, 100) }, sheets: names.map((n) => ({ properties: { title: n, gridProperties: { frozenRowCount: 1 } } })) }));
-  const data = sheets.map((s, i) => ({ range: `'${names[i]}'!A1`, values: (s.rows || []).slice(0, 2000).map((r) => r.map((v) => (v == null ? '' : v))) })).filter((d) => d.values.length);
+  const data = sheets.map((s, i) => ({ range: `'${names[i]}'!A1`, values: (s.rows || []).slice(0, 20000).map((r) => r.map((v) => (v == null ? '' : v))) })).filter((d) => d.values.length);
   if (data.length) await gf(`${SHEETS}/${c.spreadsheetId}/values:batchUpdate`, jsonOpt('POST', { valueInputOption: 'RAW', data }));
   await gf(`${SHEETS}/${c.spreadsheetId}:batchUpdate`, jsonOpt('POST', { requests: c.sheets.map((s) => boldReq(s.properties.sheetId)) }));
   return { ok: true, url: c.spreadsheetUrl };
@@ -232,6 +232,32 @@ async function writeTable(name, data) {
     await gf(`${SHEETS}/${ssId}:batchUpdate`, jsonOpt('POST', { requests: [boldReq(id), freezeReq(id)] }));
   });
 }
+
+/* ---------------- 데이터 지우기 (학급 기초설정 → 데이터 관리) ---------------- */
+async function clearData(targets) {
+  const T_ = new Set(targets), plan = APP_CLEAR(T_);
+  if (T_.has('roster')) await replaceAll('roster', []);
+  if (T_.has('logs')) await replaceAll('logs', []);
+  // 역할 양식 파일(드라이브)
+  if (plan.files) for (const r of rows.data.filter((x) => x[0].indexOf('role:form:') === 0)) {
+    try { const id = JSON.parse(r[1]).fileId; if (id) await gf(`${DRIVE}/${encodeURIComponent(id)}`, jsonOpt('PATCH', { trashed: true })); } catch (e) { /* 이미 없는 파일 */ }
+  }
+  if (plan.prefixes.length || plan.gradeCfg) {
+    const keep = rows.data.filter((r) => r[0] !== '' && !plan.prefixes.some((p) => r[0] === p || r[0].indexOf(p) === 0)).map((r) => {
+      if (r[0] !== 'grade:cfg' || !plan.gradeCfg) return r;
+      try { const c = JSON.parse(r[1]); if (plan.gradeCfg.perf) c.perf = { '1': [], '2': [] }; if (plan.gradeCfg.evals) c.evals = []; return [r[0], JSON.stringify(c), String(Date.now())]; } catch (e) { return r; }
+    });
+    await replaceAll('data', keep);
+  }
+  // 시트에 내보낸 성적 탭(성적_…)도 지우기
+  const tabs = Object.keys(sheetIds).filter((n) => n.indexOf('성적_') === 0 && ((plan.gradeCfg && plan.gradeCfg.perf && /^성적_[12]학기_/.test(n)) || (plan.gradeCfg && plan.gradeCfg.evals && !/^성적_[12]학기_/.test(n))));
+  if (tabs.length) await enqueue(async () => {
+    await gf(`${SHEETS}/${ssId}:batchUpdate`, jsonOpt('POST', { requests: tabs.map((n) => ({ deleteSheet: { sheetId: sheetIds[n] } })) }));
+    tabs.forEach((n) => { delete sheetIds[n]; });
+  });
+  return { ok: true };
+}
+const APP_CLEAR = (t) => window.APP.clearPlan(t);
 
 /* ---------------- 서버 동작 (예전 Apps Script와 같은 이름) ---------------- */
 async function handle(action, d) {
@@ -280,6 +306,7 @@ async function handle(action, d) {
       await upsert('logs', 0, [String(l.id), String(l.date), String(l.content || '').slice(0, 5000), String(l.names || '').slice(0, 500), String(l.created || Date.now()), String(l.tone || '')]); return { ok: true };
     }
     case 'logDel': await checkPw(d.pw); await removeRow('logs', 0, String(d.id)); return { ok: true };
+    case 'clearData': await checkPw(d.pw); return clearData(d.targets || []);
     case 'writeTable': await checkPw(d.pw); await writeTable(d.name, d.rows); return { ok: true };
     case 'exportSheet': return exportSheet(d.title, d.sheets);
     case 'uploadFile': return upload(d.data, d.mime, d.name);
