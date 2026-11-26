@@ -336,7 +336,8 @@ function askPw(onOk) {
   document.body.append(ov); input.focus();
 }
 let lastAct = Date.now();
-['click', 'keydown', 'touchstart', 'pointerdown', 'wheel'].forEach((ev) => document.addEventListener(ev, () => { lastAct = Date.now(); }, { passive: true }));
+// 이 페이지 안에서의 조작만 셈. 조작이 들어오면 먼저 "그동안 5분 넘게 비었는지" 확인해서 잠근 뒤에 시각을 갱신
+['pointerdown', 'touchstart', 'mousedown', 'keydown', 'wheel', 'click'].forEach((ev) => document.addEventListener(ev, () => { autoLockSubmit(); lastAct = Date.now(); }, { passive: true, capture: true }));
 // 다른 탭·앱으로 2분 넘게 나가 있다 돌아오면 비밀번호 메뉴를 잠금
 let hiddenAt = 0;
 document.addEventListener('visibilitychange', () => {
@@ -344,13 +345,18 @@ document.addEventListener('visibilitychange', () => {
   if (S.unlocked && !S.rosterDirty && hiddenAt && Date.now() - hiddenAt > 2 * 60 * 1000) { lock(); toast('자리를 비워서 잠갔습니다'); }
 });
 // 제출확인 페이지·학급보드판에서 5분 동안 조작이 없으면 제출확인판을 모두 잠금
-setInterval(() => {
+function autoLockSubmit() {
   if (!['submit', 'board'].includes(S.tab) || Date.now() - lastAct < 5 * 60 * 1000) return;
   let n = 0;
   (S.boards || []).forEach((b) => { if (!b.locked) { b.locked = true; n++; try { queueBoardSave(b); } catch (e) { /* 다음에 */ } } });
   const w = APP.classBoard && APP.classBoard.lockWidgets ? APP.classBoard.lockWidgets() : 0;
   if (n || w) { if (S.tab === 'submit') renderPage(); toast('5분 동안 조작이 없어 제출확인판을 잠갔어요'); }
-}, 20000);
+}
+setInterval(autoLockSubmit, 15000);
+// 다른 창·앱에 있다가 돌아왔을 때도 바로 확인 (멈춰 있던 타이머 대비)
+document.addEventListener('visibilitychange', () => { if (!document.hidden) autoLockSubmit(); });
+window.addEventListener('focus', autoLockSubmit);
+window.addEventListener('pageshow', autoLockSubmit);
 setInterval(() => { if (S.unlocked && !S.rosterDirty && Date.now() - lastAct > 10 * 60 * 1000) { lock(); toast('10분간 사용이 없어 잠갔습니다'); } }, 30000);
 
 /* =====================================================
