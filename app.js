@@ -66,7 +66,8 @@ const TABS = [
   { id: 'seat', name: '자리 관리' },
   { id: 'role', name: '역할 관리' },
   { id: 'draw', name: '뽑기' },
-  { id: 'submit', name: '제출확인' }
+  { id: 'submit', name: '제출확인' },
+  { id: 'board', name: '학급보드판' }
 ];
 
 /* ---------- 데이터 관리: 지울 수 있는 항목 ---------- */
@@ -793,14 +794,11 @@ function pageSubmit() {
   } }, '전체 잠금/해제');
   const fsBtn = h('button', { onclick: () => { document.fullscreenElement ? document.exitFullscreen() : (wrap.requestFullscreen && wrap.requestFullscreen()); } }, '전체화면');
   const cfgBtn = h('button', { onclick: () => subSettings() }, '설정');
-  let showBoard = true; try { showBoard = localStorage.getItem('board_show') !== '0'; } catch (e) { /* 기본 보이기 */ }
-  const boardBtn = h('button', { class: showBoard ? 'primary' : '', onclick: () => { showBoard = !showBoard; try { localStorage.setItem('board_show', showBoard ? '1' : '0'); } catch (e) { /* 저장 안 됨 */ } renderPage(); } }, '학급보드판');
-  const bar = h('div', { class: 'sub-bar' }, addBtn, allLock, fsBtn, cfgBtn, boardBtn, saveState, h('span', { class: 'muted' }, '한 번 누르면 제출(회색), 두 번 빠르게 누르면 확인(연두색)'));
+  const bar = h('div', { class: 'sub-bar' }, addBtn, allLock, fsBtn, cfgBtn, saveState, h('span', { class: 'muted' }, '한 번 누르면 제출(회색), 두 번 빠르게 누르면 확인(연두색)'));
   const C = subCfg();
   const shownName = (st) => (C.mode === 'given' ? givenName(st) : st.name);
   if (C.num) area.classList.add('with-num');
-  const boardPanel = showBoard && APP.classBoard ? APP.classBoard.mount({ roster: () => S.roster.slice().sort(byNum), name: (st) => shownName(st) }) : null;
-  wrap.append(bar, h('div', { class: 'sub-split' + (boardPanel ? ' with-board' : '') }, area, boardPanel));
+  wrap.append(bar, area);
 
   function syncLock(e) {
     const b = e.board;
@@ -858,7 +856,7 @@ function pageSubmit() {
 
   function layout() {
     const cnt = entries.length;
-    if (!cnt) { area.style.height = 'auto'; area.style.gridTemplateRows = ''; area.style.gridTemplateColumns = '1fr'; if (boardPanel) { boardPanel.style.height = Math.max(320, window.innerHeight - boardPanel.getBoundingClientRect().top - (document.fullscreenElement ? 14 : 52)) + 'px'; APP.classBoard.relayout(); } return; }
+    if (!cnt) { area.style.height = 'auto'; area.style.gridTemplateRows = ''; area.style.gridTemplateColumns = '1fr'; return; }
     const top = area.getBoundingClientRect().top;
     const H = Math.max(220, window.innerHeight - top - (document.fullscreenElement ? 14 : 52)), W = area.clientWidth, GAP = 12, HEAD = 46, PAD = 18, CG = 4;
     let best = null;
@@ -871,7 +869,6 @@ function pageSubmit() {
     }
     const cw = Math.max(14, Math.min(220, Math.floor(best.cw))), ch = Math.max(12, Math.min(150, Math.floor(best.ch)));
     area.style.height = H + 'px';
-    if (boardPanel) { boardPanel.style.height = H + 'px'; APP.classBoard.relayout(); }
     entries.forEach((e) => e.el.classList.toggle('narrow', best.narrow));
     area.style.setProperty('--cw', cw + 'px'); area.style.setProperty('--ch', ch + 'px');
     // 3글자 이름이 칸에 꼭 맞는 글자 크기 (번호를 함께 쓰면 조금 작게)
@@ -888,6 +885,8 @@ function pageSubmit() {
   return wrap;
 }
 window.addEventListener('resize', () => relayoutSub && relayoutSub());
+/* 학급보드판의 제출확인 상자에서 쓰는 이름 (제출확인판 설정과 같게) */
+const subDisplayName = (st) => (subCfg().mode === 'given' ? givenName(st) : st.name);
 /* 11월 26일 (목) */
 const mdw = (t) => { const d = new Date(t); return `${d.getMonth() + 1}월 ${d.getDate()}일 (${'일월화수목금토'[d.getDay()]})`; };
 /* 제출확인판 설정: 표기할 이름(성+이름 / 이름만), 번호 표시 */
@@ -927,7 +926,7 @@ async function kvGet(keys) {
 }
 const APP = window.APP = {
   S, h, $, api, toast, errMsg, clone, byNum, ERR, gcls, DEMO,
-  pages: {}, onLock: [], onClear: [], clearPlan,
+  pages: {}, onLock: [], onClear: [], clearPlan, subDisplayName: (st) => subDisplayName(st), byNum,
   renderPage: () => renderPage(),
   kvGet, kvSet: (key, obj) => api('kvSet', { key, value: JSON.stringify(obj) }),
   kvList: async (prefix) => (await api('kvList', { prefix })).keys,

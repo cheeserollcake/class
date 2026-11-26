@@ -356,6 +356,7 @@ function drawHead() {
     h('div', { style: 'flex:1' }),
     ...(d.locked ? [] : [h('button', { class: 'sm', onclick: settings }, '설정'), h('button', { class: 'sm', title: '열에 맞춰 다시 정렬', onclick: () => { d.layouts = {}; save(); render(); } }, '자동정렬'),
       h('button', { class: 'sm', title: '빈 보드를 새로 만들어요 (지금 보드는 그대로 남아요)', onclick: addBoard }, '+ 보드 추가')]),
+    h('button', { class: 'sm', title: '전체화면', onclick: () => { const w = B.panel.closest('.bd-page') || B.panel; document.fullscreenElement ? document.exitFullscreen() : (w.requestFullscreen && w.requestFullscreen()); } }, document.fullscreenElement ? '전체화면 끝' : '전체화면'),
     h('button', { class: 'sm' + (d.locked ? ' primary' : ''), title: '잠그면 학생이 보드를 고칠 수 없어요', onclick: () => { d.locked = !d.locked; save(); render(); } }, d.locked ? '🔒 잠김' : '잠금'));
 }
 function mount(ctx) {
@@ -379,4 +380,22 @@ function mount(ctx) {
 function relayout() { if (B.data) place(); }
 function refresh() { if (!B.data || !B.canvas || !B.canvas.isConnected) return; const n = B.data.items.length; syncWidgets(); if (B.data.items.length !== n) return render(); B.inner.querySelectorAll('.bi-widget').forEach((el) => { const it = B.data.items.find((x) => x.id === el.dataset.id); if (it) { el.firstChild.replaceWith(widgetBody(it, CTX)); } }); place(); }
 APP.classBoard = { mount, relayout, refresh };
+
+/* 메인 메뉴: 학급보드판 */
+APP.pages.board = () => {
+  const panel = mount({ roster: () => APP.S.roster.slice().sort((a, b) => a.num - b.num), name: (st) => APP.subDisplayName(st) });
+  const wrap = h('div', { class: 'bd-page' }, panel);
+  const fit = () => {
+    if (!panel.isConnected) return;
+    const top = panel.getBoundingClientRect().top;
+    panel.style.height = Math.max(360, window.innerHeight - top - (document.fullscreenElement ? 12 : 24)) + 'px';
+    relayout();
+  };
+  fitPanel = fit;
+  requestAnimationFrame(fit);
+  return wrap;
+};
+let fitPanel = null;
+window.addEventListener('resize', () => { if (fitPanel) fitPanel(); });
+document.addEventListener('fullscreenchange', () => setTimeout(() => { if (fitPanel) fitPanel(); }, 60));
 })();

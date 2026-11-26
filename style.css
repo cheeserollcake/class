@@ -535,3 +535,5 @@ input.gcell.locked { background: #f3f4f6 !important; color: var(--sub); }
 .bd-evform .row { justify-content: flex-start !important; }
 .bd-evlist .list-item { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 .bd-sel { font-weight: 700; font-size: 14px; padding: 4px 8px; max-width: 160px; }
+.bd-page .bd-panel { width: 100%; min-width: 0; flex: none; }
+.bd-page:fullscreen { background: var(--bg); padding: 12px; }
