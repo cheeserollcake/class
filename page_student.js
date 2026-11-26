@@ -327,7 +327,7 @@ function viewInput(redraw) {
       ta, chips, warn, toneRow, pairBox,
       h('div', { class: 'row', style: 'margin-top:10px;justify-content:flex-end' },
         ST.editId ? h('button', { onclick: () => { ST.editId = null; ST.text = ''; ST.tone = ''; ST.pairEdit = {}; redraw(); } }, '수정 취소') : null, saveBtn)),
-    h('div', { class: 'card' }, h('h3', null, `최근 기록 (${ST.logs.length}건 중 ${recent.length}건)`),
+    h('details', { class: 'card fold', open: ST.open.recent ? '' : null, ontoggle: (e) => { ST.open.recent = e.target.open; } }, h('summary', null, h('h3', null, `최근 기록 (${ST.logs.length}건 중 ${recent.length}건)`)),
       recent.length ? recent.map((l) => logItem(l, '', redraw, true)) : h('div', { class: 'muted' }, '아직 기록이 없습니다.')),
     (upd(), null));
 }
