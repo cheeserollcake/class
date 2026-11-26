@@ -240,7 +240,13 @@ table.rolelist { min-width: 420px; } table.rolelist td input { min-width: 90px; 
 .sbd-head button { white-space: nowrap; }
 .sbd-grid { display: grid; gap: 4px; }
 .scell { width: var(--cw); height: var(--ch); background: var(--yellow); border: 2px solid #f2c200; border-radius: 6px; display: flex; align-items: center; justify-content: center; cursor: pointer; user-select: none; overflow: hidden; }
-.scell .nm { font-weight: 700; font-size: min(calc(var(--ch) * 0.5), calc(var(--cw) * var(--k))); white-space: nowrap; line-height: 1; }
+.scell { flex-direction: column; gap: 2px; padding: 2px; }
+.scell .nm { font-weight: 700; font-size: calc(var(--fsb, 20px) * var(--r, 1)); white-space: nowrap; line-height: 1.05; text-align: center; }
+.scell.wrap2 .nm { white-space: normal; word-break: break-all; max-width: 100%; font-size: min(calc(var(--fsb, 20px) * var(--r, 1)), calc(var(--ch) * 0.34)); }
+.scell .no { font-size: calc(var(--fsb, 20px) * 0.45); line-height: 1; color: #8a6d00; font-weight: 600; }
+.scell.green { background: #c6f6b6; border-color: #6cc24a; }
+.scell.green .no { color: #3f7d26; }
+.scell.done .no { color: #b0b5bd; }
 .scell.done { background: #fff; border-color: var(--line); color: #a0a6b0; }
 .scell.done .nm { font-weight: 500; }
 .sbd.locked .scell { cursor: default; }

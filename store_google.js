@@ -60,13 +60,13 @@ const A = (name, range) => encodeURIComponent(`'${name}'` + (range ? '!' + range
 
 /* ---------------- 스프레드시트 준비 ---------------- */
 const T = {
-  roster: { name: '명렬표', headers: ['번호', '이름', '성별', '연락처', '생년월일', '특기사항', '호칭', '비고1', '비고2', '비고3'], cols: 'J' },
-  boards: { name: '제출확인', headers: ['id', '제목', '잠금', '제출번호', '생성'], cols: 'E' },
+  roster: { name: '명렬표', headers: ['번호', '이름', '성별', '연락처', '생년월일', '특기사항', '호칭', '비고1', '비고2', '비고3', '성씨'], cols: 'K' },
+  boards: { name: '제출확인', headers: ['id', '제목', '잠금', '제출번호', '생성', '확인번호'], cols: 'F' },
   settings: { name: '설정', headers: ['key', 'value'], cols: 'B' },
   data: { name: '데이터', headers: ['key', 'value', 'updated'], cols: 'C' },
   logs: { name: '누가기록', headers: ['id', '날짜', '내용', '등장학생', '기록시각', '사건 성격'], cols: 'F' }
 };
-const ROSTER_KEYS = ['num', 'name', 'gender', 'phone', 'birth', 'note', 'title', 'b1', 'b2', 'b3'];
+const ROSTER_KEYS = ['num', 'name', 'gender', 'phone', 'birth', 'note', 'title', 'b1', 'b2', 'b3', 'surname'];
 let ssId = '', sheetIds = {}, folderId = '', ready = null, chain = Promise.resolve();
 const rows = {};   // 탭별 메모리 사본 (머리글 제외)
 const enqueue = (fn) => { const p = chain.then(fn, fn); chain = p.catch(() => {}); return p; };   // 쓰기는 순서대로 하나씩
@@ -108,9 +108,9 @@ async function readAll() {
 }
 /* 예전에 만든 시트에 새 머리글(예: 누가기록 '사건 성격')을 한 번만 채워 넣기 */
 async function fixHeaders() {
-  const flag = 'classapp_hdr2_' + ssId;
+  const flag = 'classapp_hdr3_' + ssId;
   if (localStorage.getItem(flag)) return;
-  await gf(`${SHEETS}/${ssId}/values/${A(T.logs.name, 'A1')}?valueInputOption=RAW`, jsonOpt('PUT', { values: [T.logs.headers] }));
+  for (const k of ['logs', 'roster', 'boards']) await gf(`${SHEETS}/${ssId}/values/${A(T[k].name, 'A1')}?valueInputOption=RAW`, jsonOpt('PUT', { values: [T[k].headers] }));
   localStorage.setItem(flag, '1');
 }
 function ensure(fresh) {
@@ -162,13 +162,13 @@ function readRoster(full) {
   const out = [];
   rows.roster.forEach((r) => {
     if (r[0] === '' && r[1] === '') return;
-    const o = { num: Number(r[0]) || 0, name: r[1], gender: r[2] };
+    const o = { num: Number(r[0]) || 0, name: r[1], gender: r[2], surname: r[10] || '' };
     if (full) for (let i = 3; i < ROSTER_KEYS.length; i++) o[ROSTER_KEYS[i]] = r[i];
     out.push(o);
   });
   return out;
 }
-const readBoards = () => rows.boards.filter((r) => r[0] !== '').map((r) => { let done = []; try { done = JSON.parse(r[3] || '[]'); } catch (e) { /* 빈 값 */ } return { id: r[0], title: r[1], locked: r[2] === 'Y', done, created: Number(r[4]) || 0 }; });
+const readBoards = () => rows.boards.filter((r) => r[0] !== '').map((r) => { let done = []; try { done = JSON.parse(r[3] || '[]'); } catch (e) { /* 빈 값 */ } let green = []; try { green = JSON.parse(r[5] || '[]'); } catch (e) { /* 빈 값 */ } return { id: r[0], title: r[1], locked: r[2] === 'Y', done, green, created: Number(r[4]) || 0 }; });
 
 const kvRows = () => rows.data;
 async function importDemo(db) {
@@ -177,7 +177,7 @@ async function importDemo(db) {
   if (db.pw && db.pw !== DEFAULT_PW) { const salt = (crypto.randomUUID ? crypto.randomUUID() : String(Math.random())); await setSetting('salt', salt); await setSetting('pwHash', await sha256(salt + ':' + db.pw)); }
   await replaceAll('roster', (db.roster || []).map((r) => ROSTER_KEYS.map((k) => (r[k] == null ? '' : String(r[k]).slice(0, 500)))));
   if (db.seat) await setSetting('seat', JSON.stringify(db.seat));
-  for (const b of db.boards || []) await upsert('boards', 0, [String(b.id), String(b.title || ''), b.locked ? 'Y' : 'N', JSON.stringify(b.done || []), String(b.created || Date.now())]);
+  for (const b of db.boards || []) await upsert('boards', 0, [String(b.id), String(b.title || ''), b.locked ? 'Y' : 'N', JSON.stringify(b.done || []), String(b.created || Date.now()), JSON.stringify(b.green || [])]);
   await replaceAll('logs', (db.logs || []).map((l) => [String(l.id), String(l.date), String(l.content || ''), String(l.names || ''), String(l.created || Date.now()), String(l.tone || '')]));
   const idMap = {};
   for (const [id, f] of Object.entries(db.files || {})) { try { idMap[id] = (await upload(f.data, f.mime, f.name)).fileId; } catch (e) { /* 파일 하나 실패해도 계속 */ } }
@@ -281,7 +281,7 @@ async function handle(action, d) {
     }
     case 'saveBoard': {
       const b = d.board; if (!b || !b.id) throw new Error('BAD');
-      await upsert('boards', 0, [String(b.id), String(b.title || '').slice(0, 200), b.locked ? 'Y' : 'N', JSON.stringify(b.done || []), String(b.created || Date.now())]); return { ok: true };
+      await upsert('boards', 0, [String(b.id), String(b.title || '').slice(0, 200), b.locked ? 'Y' : 'N', JSON.stringify(b.done || []), String(b.created || Date.now()), JSON.stringify(b.green || [])]); return { ok: true };
     }
     case 'deleteBoard': await removeRow('boards', 0, String(d.id)); return { ok: true };
     case 'kvGet': {

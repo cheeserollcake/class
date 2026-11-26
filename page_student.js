@@ -96,7 +96,8 @@ async function loadSurvey(main) {
   }
   return sv;
 }
-const LEVELS = [[4, '좋음', '#2f6fed'], [3, '친해지고 싶음', '#22a06b'], [2, '그저 그럼', '#9aa3af'], [1, '싫음', '#e5484d']];
+/* 키보드 숫자 = 값: 1 싫음, 2 그저 그럼, 3 친해지고 싶음, 4 좋음 */
+const LEVELS = [[1, '싫음', '#e5484d'], [2, '그저 그럼', '#9aa3af'], [3, '친해지고 싶음', '#22a06b'], [4, '좋음', '#2f6fed']];
 const LV_SCORE = { 4: 2, 3: 1, 2: 0, 1: -2 };
 
 /* ---------- 사건 성격(긍정/부정) 판단 ---------- */
@@ -351,10 +352,10 @@ function viewSurvey(redraw) {
   friends.forEach((f, i) => {
     const row = h('div', { class: 'sv-row ' + APP.gcls(f.gender), tabindex: 0 });
     row.append(h('span', { class: 'sv-fname' }, `${f.num} ${f.name}`),
-      h('span', { class: 'lv-group' }, LEVELS.map(([v, n, c], k) => h('button', { type: 'button', tabindex: -1, class: 'lv' + (mine[f.num] === v ? ' on' : ''), 'data-v': v, style: `--c:${c}`, title: `키보드 ${k + 1}`, onclick: () => { setV(f, v, row); row.focus(); } }, `${k + 1} ${n}`))));
+      h('span', { class: 'lv-group' }, LEVELS.map(([v, n, c]) => h('button', { type: 'button', tabindex: -1, class: 'lv' + (mine[f.num] === v ? ' on' : ''), 'data-v': v, style: `--c:${c}`, title: `키보드 ${v}`, onclick: () => { setV(f, v, row); row.focus(); } }, `${v} ${n}`))));
     row.addEventListener('keydown', (e) => {
       const k = Number(e.key);
-      if (k >= 1 && k <= 4) { e.preventDefault(); const v = LEVELS[k - 1][0]; mine[f.num] = undefined; setV(f, v, row); (rowsEl[i + 1] || row).focus(); }
+      if (k >= 1 && k <= 4) { e.preventDefault(); mine[f.num] = undefined; setV(f, k, row); (rowsEl[i + 1] || row).focus(); }
       else if (e.key === 'ArrowDown') { e.preventDefault(); (rowsEl[i + 1] || row).focus(); }
       else if (e.key === 'ArrowUp') { e.preventDefault(); (rowsEl[i - 1] || row).focus(); }
       else if (e.key === 'Enter' && i === friends.length - 1) { e.preventDefault(); go(1); }
@@ -363,10 +364,14 @@ function viewSurvey(redraw) {
   });
   const cnt = h('span', { class: 'muted' }, `${done(me.num)}/${need}명 평가함`);
   box.append(h('h3', null, '교우관계 조사 입력'), head,
-    h('div', { class: 'muted', style: 'margin:10px 0;line-height:1.7' }, '평가한 학생을 고른 뒤, 친구마다 4단계 중 하나를 누르세요. 키보드 숫자 1~4로 입력하면 다음 친구로 넘어가요. (↑↓ 이동, 같은 칸을 다시 누르면 지워져요) 자동 저장돼요.'),
+    h('div', { class: 'muted', style: 'margin:10px 0;line-height:1.7' }, '평가한 학생을 고른 뒤, 친구마다 4단계 중 하나를 누르세요. 키보드 숫자(1 싫음 · 2 그저 그럼 · 3 친해지고 싶음 · 4 좋음)로 입력하면 다음 친구로 넘어가요. (↑↓ 이동, 같은 칸을 다시 누르면 지워져요) 자동 저장돼요.'),
     nav,
     h('div', { class: 'row', style: 'justify-content:space-between;margin:10px 0 6px' }, h('b', null, `${me.num}번 ${me.name} 학생의 평가`), cnt,
-      h('button', { class: 'sm ghost', onclick: () => { friends.forEach((f) => { if (!mine[f.num]) mine[f.num] = 2; }); saveSurveyLater(round.id); redraw(); } }, '빈 칸 모두 "그저 그럼"')),
+      h('button', { class: 'sm danger', onclick: () => {
+        if (!done(me.num)) return toast(`${me.name} 학생은 아직 입력한 기록이 없어요`);
+        if (!confirm(`${me.name} 학생이 친구들을 평가한 기록 ${done(me.num)}개를 모두 지울까요?`)) return;
+        delete data[me.num]; saveSurveyLater(round.id); toast(`${me.name} 학생의 기록을 지웠어요`); redraw();
+      } }, '이 학생 기록 삭제')),
     h('div', { class: 'sv-list' }, rowsEl));
   setTimeout(() => { const first = rowsEl.find((r, i) => !mine[friends[i].num]) || rowsEl[0]; if (first && document.activeElement === document.body) first.focus({ preventScroll: true }); }, 0);
   return box;
