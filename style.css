@@ -418,3 +418,5 @@ select.cm-pol.neg { color: var(--danger); font-weight: 700; }
 table.roster.cm-table { min-width: 680px; }
 .cm-table td:last-child { width: 1%; white-space: nowrap; padding-left: 4px; }
 .cm-table td.cm-tcell { min-width: 220px; }
+
+.cm-why { margin-top: 4px; font-size: 12px; color: #b42318; }

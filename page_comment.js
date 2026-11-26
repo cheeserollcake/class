@@ -363,24 +363,44 @@ async function subjContext(sb) {
     const a = avgOf(n); if (a == null || !it.max) return -1;
     return G().bandIdx(it.cuts.map((c) => (c / it.max) * 100), a);
   };
-  return { pool, avgOf, bandOf, labels };
+  return { pool, avgOf, bandOf, scoreOf, labels };
 }
 function subjOne(num, n, ctx, sb, used) {
-  const ok = nameCheck(num), parts = [], skip = new Set(); let reused = 0;
-  const lists = sb.items.map((it) => { const b = ctx.bandOf(num, it); return b < 0 ? [] : ctx.pool.filter((r) => r.itemId === it.id && r.band === b && ok(r.text)).map((r) => ({ id: r.id, text: r.text })); });
-  let guard = 0;
-  while (parts.length < n && guard++ < 50) {
-    let progress = false;
-    for (let i = 0; i < lists.length && parts.length < n; i++) {
-      const p = pickMin(lists[i], used, skip); if (!p) continue;
-      skip.add(p.cand.id); progress = true; if (p.reuse) reused++;
-      parts.push({ id: p.cand.id, text: vary(p.cand.text, p.reuse + (parts.length && Math.random() < 0.35 ? 1 : 0)) });
+  const ok = nameCheck(num), parts = [], skip = new Set(), why = []; let reused = 0;
+  const L = ctx.labels;
+  // 평가기준마다 이 학생 성적에 맞는 평어 후보
+  const items = sb.items.map((it, idx) => {
+    const b = ctx.bandOf(num, it), all = b < 0 ? [] : ctx.pool.filter((r) => r.itemId === it.id && r.band === b);
+    const list = all.filter((r) => ok(r.text)).map((r) => ({ id: r.id, text: r.text, idx }));
+    let reason = '';
+    if (b < 0) reason = `'${it.name}' 성적 없음`;
+    else if (!all.length) reason = `'${it.name}'의 '${L[b]}' 평어가 입력되지 않음`;
+    else if (!list.length) reason = `'${it.name}'의 '${L[b]}' 평어에 다른 학생 이름이 들어 있어 쓸 수 없음`;
+    return { it, idx, list, reason };
+  });
+  const hasScore = sb.items.some((it) => ctx.scoreOf(num, it) != null);
+  // 과목의 모든 평가기준을 섞어서, 한 바퀴 안에서는 같은 평가기준을 다시 쓰지 않고, 학급 전체에서 덜 쓴 문장부터
+  let round = new Set();
+  while (parts.length < n) {
+    let avail = items.filter((x) => !round.has(x.idx) && x.list.some((c) => !skip.has(c.id)));
+    if (!avail.length) { round = new Set(); avail = items.filter((x) => x.list.some((c) => !skip.has(c.id))); if (!avail.length) break; }
+    const p = pickMin(avail.flatMap((x) => x.list), used, skip); if (!p) break;
+    skip.add(p.cand.id); round.add(p.cand.idx); if (p.reuse) reused++;
+    parts.push({ id: p.cand.id, idx: p.cand.idx, text: vary(p.cand.text, p.reuse + (parts.length && Math.random() < 0.35 ? 1 : 0)) });
+  }
+  parts.sort((a, b) => a.idx - b.idx);   // 평가기준 순서대로 놓기
+  parts.forEach((p) => { delete p.idx; });
+  if (parts.length < n) {
+    if (!hasScore && ctx.avgOf(num) == null) why.push(`${sb.name} 성적이 입력되지 않음`);
+    else {
+      items.filter((x) => x.reason).forEach((x) => why.push(x.reason));
+      const total = items.reduce((a, x) => a + x.list.length, 0);
+      if (total && total < n) why.push(`쓸 수 있는 평어가 ${total}개뿐이라 ${n}문장을 채우지 못함`);
     }
-    if (!progress) break;
   }
   // 이어 주는 말은 한 문단에 한 번만
   if (parts.length > 1 && Math.random() < 0.4) { const i = 1 + Math.floor(Math.random() * (parts.length - 1)); if (!/^(또한|특히|아울러|다만)/.test(parts[i].text)) parts[i].text = CONNECT[Math.floor(Math.random() * CONNECT.length)] + parts[i].text; }
-  return { parts, reused, short: parts.length < n };
+  return { parts, reused, short: parts.length < n, why };
 }
 async function genSubjView(redraw) {
   const s = sem(), subs = (GR().cfg.perf[s] || []).filter((x) => x.items.length);
@@ -410,7 +430,13 @@ function ccOne(num, n, pool, used) {
     parts.push({ id: p.cand.id, date: p.cand.date || '', text: vary(p.cand.text, p.reuse) });
   }
   parts.sort((a, b) => String(a.date || '9').localeCompare(String(b.date || '9')));
-  return { parts, reused, short: parts.length < n };
+  const why = [];
+  if (parts.length < n) {
+    if (!pool.length) why.push('이 과목에 입력된 창체 평어가 없음');
+    else if (!cands.length) why.push('평어에 다른 학생 이름이 들어 있어 쓸 수 없음');
+    else why.push(`쓸 수 있는 평어가 ${cands.length}개뿐이라 ${n}문장을 채우지 못함`);
+  }
+  return { parts, reused, short: parts.length < n, why };
 }
 async function genCCView(redraw) {
   const s = sem(), d = CM.kv[K.cc(s)], subs = d.subjects;
@@ -466,7 +492,18 @@ function behOne(num, n, pool, ins, used) {
   // 순서: 교과 → 행동 → 부정(맨 끝, "다만")
   parts.sort((a, b) => (a.pol < 0) - (b.pol < 0) || (a.kind === 'subj' ? 0 : 1) - (b.kind === 'subj' ? 0 : 1));
   parts.forEach((p) => { if (p.pol < 0 && !/^(다만|하지만|그러나)/.test(p.text)) p.text = '다만, ' + p.text; });
-  return { parts, reused, short: parts.length < n };
+  const why = [];
+  if (parts.length < n || !parts.some((p) => p.kind === 'subj') || !parts.some((p) => p.kind === 'act')) {
+    const posS = all.filter((c) => c.pol > 0 && c.kind === 'subj').length, posA = all.filter((c) => c.pol > 0 && c.kind === 'act').length;
+    if (!pool.length && !auto.length) why.push('입력된 행발 평어가 없고 누가기록·교우관계 자료도 없음');
+    else {
+      if (!posS) why.push('교과 긍정 평어가 입력되지 않음');
+      if (!posA) why.push('행동 긍정 평어가 입력되지 않음 (누가기록·교우관계에서도 찾지 못함)');
+      if (parts.length < n && posS && posA) why.push(`쓸 수 있는 평어가 ${posS + posA + (negSlot >= 0 ? 1 : 0)}개뿐이라 ${n}문장을 채우지 못함`);
+      if (pool.some((r) => !ok(r.text))) why.push('일부 평어에 다른 학생 이름이 들어 있어 뺌');
+    }
+  }
+  return { parts, reused, short: parts.length < n, why };
 }
 async function genBehView(redraw) {
   const s = sem(), key = K.gBeh(s); await load([key]);
@@ -490,9 +527,9 @@ function genTable(o) {
   const usedFrom = (except) => { const u = new Map(); if (g) Object.entries(g.rows).forEach(([num, r]) => { if (Number(num) === except) return; r.parts.forEach((p) => u.set(p.id, (u.get(p.id) || 0) + 1)); }); return u; };
   const runAll = (n) => {
     const used = new Map(), rows = {}; let reused = 0, short = 0;
-    shuffle(R).forEach((st) => { const r = o.one(st.num, n, used); rows[st.num] = { parts: r.parts }; reused += r.reused; if (r.short) short++; });
+    shuffle(R).forEach((st) => { const r = o.one(st.num, n, used); rows[st.num] = { parts: r.parts, why: r.why || [] }; reused += r.reused; if (r.short) short++; });
     g = CM.kv[key] = { n, rows, savedAt: 0 }; CM.dirty[key] = true;
-    CM.lastNote = [reused ? `평어가 부족해 ${reused}개 문장은 다른 학생과 같은 문장을 끝맺음만 바꿔 다시 썼어요.` : '', short ? `${short}명은 정한 문장 수만큼 채우지 못했어요.` : ''].filter(Boolean).join(' ');
+    CM.lastNote = [reused ? `평어가 부족해 ${reused}개 문장은 다른 학생과 같은 문장을 끝맺음만 바꿔 다시 썼어요.` : '', short ? `${short}명은 정한 문장 수만큼 채우지 못했어요. (이유는 그 학생 평어 아래 빨간 글씨로 보여요)` : ''].filter(Boolean).join(' ');
   };
   if (!g && !o.empty) { runAll(CM.n[nKind]); }
   const n = g ? g.n : CM.n[nKind];
@@ -525,12 +562,13 @@ function genTable(o) {
 
   const rows = R.filter((st) => !o.filter || o.filter(g.rows[st.num])).map((st) => {
     const row = g.rows[st.num] || (g.rows[st.num] = { parts: [] }), text = joinParts(row.parts);
-    const reroll = () => { const r = o.one(st.num, g.n, usedFrom(st.num)); row.parts = r.parts; CM.dirty[key] = true; if (r.short) toast(`${st.name}: 쓸 수 있는 평어가 모자라요`, true); o.redraw(); };
+    const reroll = () => { const r = o.one(st.num, g.n, usedFrom(st.num)); row.parts = r.parts; row.why = r.why || []; CM.dirty[key] = true; o.redraw(); };
     return h('tr', { class: APP.gcls(st.gender) },
       h('td', { class: 'cm-act' }, h('button', { class: 'sm ghost', title: '다시 조합', onclick: reroll }, '↻'), h('button', { class: 'sm ghost', title: '직접 고치기', onclick: () => editParts(st, row, o, key) }, '✎')),
       h('td', { class: 'cm-name' }, `${st.num} ${st.name}`),
       o.extraCol ? h('td', { class: 'cm-extra' }, o.extraCol[1](st.num, row)) : null,
-      h('td', { class: 'cm-gen' }, row.parts.length ? row.parts.map((p, i) => [i ? ' ' : '', h(o.bold && o.bold(p) ? 'b' : 'span', { class: p.pol < 0 ? 'cm-neg' : '' }, p.text)]) : h('span', { class: 'muted' }, '(평어 없음)')),
+      h('td', { class: 'cm-gen' }, row.parts.length ? row.parts.map((p, i) => [i ? ' ' : '', h(o.bold && o.bold(p) ? 'b' : 'span', { class: p.pol < 0 ? 'cm-neg' : '' }, p.text)]) : h('span', { class: 'muted' }, '(조합된 평어 없음)'),
+        (row.why || []).length ? h('div', { class: 'cm-why' }, (row.parts.length ? `${g.n}문장 중 ${row.parts.length}문장만 조합 — ` : '조합하지 못한 이유: ') + row.why.join(' · ')) : null),
       h('td', { class: 'cm-len' }, charLen(text) ? charLen(text) + '자' : ''));
   });
   return h('div', null, top, h('div', { class: 'card' },
@@ -561,7 +599,7 @@ function editParts(st, row, o, key) {
   const ov = h('div', { class: 'overlay' }, h('div', { class: 'modal cm-modal' }, h('h3', null, `${st.num}번 ${st.name} 평어 고치기`), list,
     h('div', { class: 'row', style: 'justify-content:flex-end;margin-top:12px' }, h('button', { onclick: close }, '취소'),
       h('button', { class: 'primary', onclick: () => {
-        row.parts = parts.filter((p) => clean(p.text)).map((p) => ({ ...p, text: clean(p.text) }));
+        row.parts = parts.filter((p) => clean(p.text)).map((p) => ({ ...p, text: clean(p.text) })); row.why = [];
         if (o.kind === 'cc') row.parts.sort((a, b) => String(a.date || '9').localeCompare(String(b.date || '9')));
         CM.dirty[key] = true; close(); o.redraw();
       } }, '적용'))));
