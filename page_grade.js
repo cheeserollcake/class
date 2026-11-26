@@ -20,20 +20,38 @@ const num = (v) => (v === '' || v == null || isNaN(Number(v)) ? null : Number(v)
 const fmt = (n) => (n == null ? '-' : Math.floor(n + 1e-9));   // 소수점 아래는 버림
 const bandIdx = (cuts, sc) => (sc == null ? -1 : sc >= cuts[0] ? 0 : sc >= cuts[1] ? 1 : sc >= cuts[2] ? 2 : 3);
 const norm = (v) => String(v == null ? '' : v).trim().toLowerCase().replace(/[①-⑩]/g, (c) => String('①②③④⑤⑥⑦⑧⑨⑩'.indexOf(c) + 1));
-const evMax = (ev) => (ev.type === 'answers' ? ev.items.reduce((s, i) => s + (Number(i.pts) || 0), 0) : Number(ev.max) || 0);
+const evMax = (ev) => {
+  if (ev.type !== 'answers') return Number(ev.max) || 0;
+  const sum = ev.items.reduce((s, i) => s + (Number(i.pts) || 0), 0);
+  return ev.total && Math.abs(sum - ev.total) < 0.01 ? Number(ev.total) : Math.round(sum * 100) / 100;
+};
+/* 점수 직접 입력 평가의 열(1회, 2회 …) */
+const colsOf = (ev) => (ev.cols && ev.cols.length ? ev.cols : [{ id: 'c1', name: '점수' }]);
+const rowOf = (d, n) => { const o = d.scores && d.scores[n]; return o == null ? {} : typeof o === 'object' ? o : { c1: o }; };
 
 function evalTotal(ev, d, n) {
-  if (ev.type === 'score') return num(d.scores && d.scores[n]);
+  if (ev.type === 'score') {   // 여러 회의 평균
+    const r = rowOf(d, n), v = colsOf(ev).map((c) => num(r[c.id])).filter((x) => x != null);
+    return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null;
+  }
   const resp = d.answers && d.answers[n];
   if (!resp || !resp.some((r) => String(r || '').trim() !== '')) return null;
   return ev.items.reduce((s, it, i) => s + (norm(resp[i]) !== '' && norm(resp[i]) === norm(it.ans) ? Number(it.pts) || 0 : 0), 0);
 }
-
+const evalCols = (ev) => (ev.type === 'answers' ? ev.items.map((_, i) => `${i + 1}번`) : colsOf(ev).map((c) => c.name));
+const evalCells = (ev, d, n) => (ev.type === 'answers' ? ev.items.map((_, i) => ((d.answers || {})[n] || [])[i] || '') : colsOf(ev).map((c) => { const v = rowOf(d, n)[c.id]; return v == null ? '' : v; }));
+/* 기본 평가: 기초학력평가 (삭제 불가, 문항 응답 자동 채점) */
+const BASE_ID = 'base';
+function ensureBaseEval() {
+  if (GR.cfg.evals.some((e) => e.id === BASE_ID)) return;
+  GR.cfg.evals.unshift({ id: BASE_ID, name: '기초학력평가', type: 'answers', fixed: true, total: 100, items: Array.from({ length: 20 }, () => ({ ans: '', pts: 5 })), cut: null, created: 0 });
+}
 async function ensure() {
   if (GR.cfg) return;
   const j = await kvGet(['grade:cfg']);
   GR.cfg = Object.assign(defCfg(), j['grade:cfg'] || {});
   GR.cfg.perf = Object.assign({ '1': [], '2': [] }, GR.cfg.perf);
+  ensureBaseEval();
 }
 async function loadKeys(keys) {
   const need = keys.filter((k) => !(k in GR.data));
@@ -98,8 +116,8 @@ async function exportGrades() {
   }));
   GR.cfg.evals.forEach((ev) => {
     const d = GR.data[evalKey(ev.id)] || { scores: {}, answers: {} }, ans = ev.type === 'answers', max = evMax(ev);
-    const head = ['번호', '이름', ...(ans ? ev.items.map((_, i) => `${i + 1}번`) : []), '총점', ev.cut != null ? '기준 도달' : ''];
-    const body = roster.map((s) => { const t = evalTotal(ev, d, s.num); return [s.num, s.name, ...(ans ? ev.items.map((_, i) => ((d.answers || {})[s.num] || [])[i] || '') : []), t, ev.cut != null && t != null ? (t >= ev.cut ? '도달' : '미도달') : '']; });
+    const head = ['번호', '이름', ...evalCols(ev), ans ? '총점' : '평균', ev.cut != null ? '기준 도달' : ''];
+    const body = roster.map((s) => { const t = evalTotal(ev, d, s.num); return [s.num, s.name, ...evalCells(ev, d, s.num), t == null ? '' : Math.round(t * 10) / 10, ev.cut != null && t != null ? (t >= ev.cut ? '도달' : '미도달') : '']; });
     items.push({ id: 'e' + ev.id, group: '기타 평가', label: ev.name, name: `성적_${ev.name}`, rows: [head, ...(ans ? [['', '정답', ...ev.items.map((i) => i.ans), max, '']] : []), ...body] });
   });
   APP.exporter.open({ title: '성적', items, empty: '내보낼 평가가 아직 없어요' });
@@ -147,11 +165,11 @@ function perfBase(redraw) {
         [0, 1, 2].map((i) => h('td', null, h('input', { type: 'number', step: 'any', value: it.cuts[i], style: 'width:78px;text-align:center', onchange: (e) => { it.cuts[i] = num(e.target.value) || 0; dirty(); } }))),
         h('td', { class: 'muted' }, `그 미만`),
         h('td', { class: 'del' }, h('button', { class: 'sm ghost', onclick: () => { sb.items.splice(ii, 1); dirty(); redraw(); } }, '✕'))))))),
-    h('div', { style: 'margin-top:8px' }, h('button', { class: 'sm', onclick: () => { sb.items.push({ id: uid('i'), name: '', max: 10, cuts: autoCuts(10) }); dirty(); redraw(); } }, '+ 평가기준 추가'))));
+    h('div', { style: 'margin-top:8px' }, h('button', { class: 'sm', onclick: () => { sb.items.push({ id: uid('i'), name: '', max: 5, cuts: autoCuts(5) }); dirty(); redraw(); } }, '+ 평가기준 추가'))));
   return h('div', null, semToggle(redraw),
     h('div', { class: 'card' }, labelRow, h('div', { class: 'muted', style: 'margin-top:6px' }, '기준 점수는 만점의 70%·30%·10%로 자동 채워져요. (만점 100점이면 70·30·10점) 직접 고쳐도 됩니다.')),
     cards,
-    h('div', { class: 'row' }, h('button', { onclick: () => { subs.push({ id: uid('s'), name: '', items: [{ id: uid('i'), name: '', max: 10, cuts: autoCuts(10) }] }); dirty(); redraw(); } }, '+ 과목 추가'),
+    h('div', { class: 'row' }, h('button', { onclick: () => { subs.push({ id: uid('s'), name: '', items: [{ id: uid('i'), name: '', max: 5, cuts: autoCuts(5) }] }); dirty(); redraw(); } }, '+ 과목 추가'),
       h('div', { style: 'flex:1' }), dirtyNote(),
       h('button', { class: 'primary', onclick: async () => {
         for (const sb of subs) for (const it of sb.items) {
@@ -224,28 +242,34 @@ async function viewEtc(redraw) {
 
 function evalForm(ev, redraw) {
   const isNew = !ev;
-  const e = ev || { id: uid('e'), name: '', type: 'score', max: 100, cut: 80, items: [], created: Date.now() };
+  const e = ev || { id: uid('e'), name: '', type: 'score', max: 100, cut: 80, items: [], cols: [{ id: 'c1', name: '1회' }], created: Date.now() };
   const box = h('div', { class: 'card' });
+  // 만점 ÷ 문항 수 = 모든 문항의 기본 배점
+  const equalPts = () => { if (!e.total || !e.items.length) return; const p = e.total / e.items.length; e.items.forEach((it) => { it.pts = Math.round(p * 10000) / 10000; }); };
+  const fmtPts = (v) => Math.round((Number(v) || 0) * 100) / 100;
   const draw = () => {
     box.replaceChildren(
       h('h3', null, isNew ? '새 평가 만들기' : '평가 설정 수정'),
-      h('div', { class: 'field' }, h('label', null, '평가 이름'), h('input', { value: e.name, placeholder: '예) 단원평가 3단원', style: 'width:100%;max-width:360px', oninput: (x) => { e.name = x.target.value; } })),
+      h('div', { class: 'field' }, h('label', null, '평가 이름'), h('input', { value: e.name, disabled: !!e.fixed, placeholder: '예) 단원평가 3단원', style: 'width:100%;max-width:360px', oninput: (x) => { e.name = x.target.value; } }),
+        e.fixed ? h('div', { class: 'muted', style: 'margin-top:4px' }, '기본 평가라서 이름을 바꾸거나 삭제할 수 없어요.') : null),
       h('div', { class: 'field' }, h('label', null, '입력 방식'), h('div', { class: 'radios' },
         [['score', '점수를 직접 입력'], ['answers', '학생별 문항 응답을 입력하면 자동 채점']].map(([v, n]) =>
-          h('label', null, h('input', { type: 'radio', name: 'etype', checked: e.type === v, disabled: !isNew, onchange: () => { e.type = v; if (v === 'answers' && !e.items.length) e.items = Array.from({ length: 10 }, () => ({ ans: '', pts: 1 })); draw(); } }), n)))),
+          h('label', null, h('input', { type: 'radio', name: 'etype', checked: e.type === v, disabled: !isNew, onchange: () => { e.type = v; if (v === 'answers' && !e.items.length) { e.items = Array.from({ length: 10 }, () => ({ ans: '', pts: 10 })); e.total = 100; } draw(); } }), n)))),
       e.type === 'score'
-        ? h('div', { class: 'field' }, h('label', null, '만점'), h('input', { type: 'number', class: 'n', value: e.max, onchange: (x) => { e.max = num(x.target.value) || 0; } }))
+        ? h('div', { class: 'field' }, h('label', null, '만점 (한 회의 만점)'), h('input', { type: 'number', class: 'n', value: e.max, onchange: (x) => { e.max = num(x.target.value) || 0; } }),
+          h('div', { class: 'muted', style: 'margin-top:4px' }, '여러 번 보는 평가(예: 받아쓰기)는 점수 입력 화면에서 "+ 열 추가"로 1회, 2회 … 를 늘릴 수 있어요. 마지막 열에 평균이 나와요.'))
         : h('div', { class: 'field' }, h('label', null, '문항 정답과 배점'),
           h('div', { class: 'row gap' }, h('span', null, '문항 수'), h('input', { type: 'number', class: 'n', min: 1, max: 60, value: e.items.length, onchange: (x) => {
-            const n = Math.max(1, Math.min(60, Number(x.target.value) | 0)); while (e.items.length < n) e.items.push({ ans: '', pts: 1 }); e.items.length = n; draw(); } }),
-            h('span', { class: 'muted' }, `만점 ${evMax(e)}점 · 정답은 숫자, ①~⑤, O/X, 글자 모두 가능`)),
+            const n = Math.max(1, Math.min(60, Number(x.target.value) | 0)); while (e.items.length < n) e.items.push({ ans: '', pts: 1 }); e.items.length = n; equalPts(); draw(); } }),
+            h('span', null, '만점'), h('input', { type: 'number', class: 'n', min: 1, step: 'any', value: e.total || evMax(e), onchange: (x) => { e.total = num(x.target.value) || 0; equalPts(); draw(); } }),
+            h('span', { class: 'muted' }, `문항당 ${fmtPts(e.items.length ? (e.total || 0) / e.items.length : 0)}점 · 문항별 배점을 따로 고칠 수도 있어요 · 정답은 숫자, ①~⑤, O/X, 글자 모두 가능`)),
           h('div', { class: 'qgrid' }, e.items.map((it, i) => h('div', { class: 'q' }, h('b', null, i + 1),
             h('input', { value: it.ans, placeholder: '정답', oninput: (x) => { it.ans = x.target.value; } }),
-            h('input', { type: 'number', step: 'any', value: it.pts, title: '배점', oninput: (x) => { it.pts = num(x.target.value) || 0; } }))))),
+            h('input', { type: 'number', step: 'any', value: fmtPts(it.pts), title: '배점', oninput: (x) => { it.pts = num(x.target.value) || 0; e.total = Math.round(e.items.reduce((a, q) => a + (Number(q.pts) || 0), 0) * 100) / 100; } }))))),
       h('div', { class: 'field' }, h('label', null, '기준 점수 (이 점수 이상이면 "기준 도달")'), h('input', { type: 'number', step: 'any', class: 'n', value: e.cut == null ? '' : e.cut, onchange: (x) => { e.cut = num(x.target.value); } })),
       h('div', { class: 'row', style: 'justify-content:flex-end' },
         h('button', { onclick: () => { GR.creating = false; GR.editing = false; redraw(); } }, '취소'),
-        !isNew ? h('button', { class: 'danger', onclick: async () => {
+        !isNew && !e.fixed ? h('button', { class: 'danger', onclick: async () => {
           if (!confirm(`"${e.name}" 평가를 삭제할까요? 입력한 점수도 사라집니다.`)) return;
           try { GR.cfg.evals = GR.cfg.evals.filter((x) => x.id !== e.id); await saveCfg(); await APP.kvDel(evalKey(e.id)); delete GR.data[evalKey(e.id)]; GR.evalId = null; GR.editing = false; redraw(); } catch (x) { toast(errMsg(x), true); }
         } }, '평가 삭제') : null,
@@ -266,6 +290,8 @@ async function evalEntry(ev, redraw) {
   const key = evalKey(ev.id); await loadKeys([key]);
   const d = GR.data[key]; d.scores = d.scores || {}; d.answers = d.answers || {};
   const max = evMax(ev), roster = APP.roster();
+  const cols = ev.type === 'score' ? colsOf(ev) : [];
+  if (ev.type === 'score') { if (!ev.cols || !ev.cols.length) ev.cols = cols; roster.forEach((s) => { if (typeof d.scores[s.num] === 'number') d.scores[s.num] = { c1: d.scores[s.num] }; }); }
   const stats = h('div', { class: 'row muted', style: 'margin-bottom:10px' });
   const upStats = () => {
     const vals = roster.map((s) => evalTotal(ev, d, s.num)).filter((v) => v != null);
@@ -281,9 +307,12 @@ async function evalEntry(ev, redraw) {
     };
     let cells;
     if (ev.type === 'score') {
-      cells = [h('td', null, h('input', { type: 'number', step: 'any', min: 0, max, class: 'gcell', 'data-r': ri, 'data-c': 0, value: d.scores[s.num] != null ? d.scores[s.num] : '', style: 'width:90px;text-align:center', oninput: (e) => {
-        const v = e.target.value; if (v === '') delete d.scores[s.num]; else d.scores[s.num] = Number(v);
-        e.target.classList.toggle('bad', Number(v) > max || Number(v) < 0); GR.dirty = true; upd(); } }))];
+      cells = cols.map((c, ci) => { const r = rowOf(d, s.num);
+        return h('td', null, h('input', { type: 'number', step: 'any', min: 0, max, class: 'gcell' + (c.locked ? ' locked' : ''), disabled: !!c.locked, 'data-r': ri, 'data-c': ci, value: r[c.id] != null ? r[c.id] : '', style: 'width:76px;text-align:center', oninput: (e) => {
+          const v = e.target.value, o = (d.scores[s.num] = typeof d.scores[s.num] === 'object' && d.scores[s.num] ? d.scores[s.num] : {});
+          if (v === '') delete o[c.id]; else o[c.id] = Number(v);
+          if (!Object.keys(o).length) delete d.scores[s.num];
+          e.target.classList.toggle('bad', Number(v) > max || Number(v) < 0); GR.dirty = true; upd(); } })); });
     } else {
       cells = ev.items.map((it, i) => {
         const inp = h('input', { class: 'ans gcell', 'data-r': ri, 'data-c': i, value: (d.answers[s.num] || [])[i] || '', oninput: (e) => {
@@ -293,28 +322,41 @@ async function evalEntry(ev, redraw) {
       });
     }
     upd();
-    return h('tr', { class: APP.gcls(s.gender) }, h('td', { class: 'sv-name' }, `${s.num} ${s.name}`), cells, tot, res);
+    return h('tr', { class: APP.gcls(s.gender) }, h('td', { class: 'sv-name' }, `${s.num} ${s.name}`), cells, ev.type === 'score' ? h('td') : null, tot, res);
   });
   upStats();
+  const colHead = (c) => h('th', { class: 'col-th' + (c.locked ? ' locked' : '') },
+    h('button', { class: 'col-name', title: c.locked ? '눌러서 잠금 풀기' : '눌러서 잠그기', onclick: async () => { c.locked = !c.locked; try { await saveCfg(); } catch (x) { toast(errMsg(x), true); } redraw(); } }, (c.locked ? '🔒 ' : '') + c.name),
+    h('button', { class: 'col-edit', title: '열 이름 바꾸기', onclick: async () => { const n = prompt('열 이름', c.name); if (!n || !n.trim()) return; c.name = n.trim().slice(0, 20); try { await saveCfg(); } catch (x) { toast(errMsg(x), true); } redraw(); } }, '✎'),
+    cols.length > 1 ? h('button', { class: 'col-edit', title: '열 삭제', onclick: async () => {
+      if (!confirm(`"${c.name}" 열을 삭제할까요? 이 열에 입력한 점수도 지워져요.`)) return;
+      ev.cols = cols.filter((x) => x !== c); Object.values(d.scores).forEach((o) => { if (o && typeof o === 'object') delete o[c.id]; });
+      try { await saveCfg(); await APP.kvSet(key, d); } catch (x) { toast(errMsg(x), true); } redraw();
+    } }, '✕') : null);
+  const addCol = async () => {
+    const n = prompt('새 열 이름', `${cols.length + 1}회`); if (!n || !n.trim()) return;
+    cols.forEach((c) => { c.locked = true; });   // 새 열을 만들면 앞의 열은 잠가서 실수로 고치지 않게
+    ev.cols = [...cols, { id: uid('c'), name: n.trim().slice(0, 20) }];
+    try { await saveCfg(); } catch (x) { toast(errMsg(x), true); } redraw();
+  };
   const head = h('tr', null, h('th', null, '학생'),
-    ev.type === 'score' ? h('th', null, `점수 (${max}점)`) : ev.items.map((it, i) => h('th', { title: `정답 ${it.ans} / ${it.pts}점` }, i + 1)),
-    h('th', null, '총점'), h('th', null, ev.cut != null ? `기준 ${ev.cut}점` : '결과'));
+    ev.type === 'score' ? [cols.map(colHead), h('th', null, h('button', { class: 'sm', onclick: addCol }, '+ 열 추가'))] : ev.items.map((it, i) => h('th', { title: `정답 ${it.ans} / ${Math.round(it.pts * 100) / 100}점` }, i + 1)),
+    h('th', null, ev.type === 'score' ? '평균' : '총점'), h('th', null, ev.cut != null ? `기준 ${ev.cut}점` : '결과'));
   return h('div', { class: 'card' },
-    h('div', { class: 'row gap' }, h('b', null, ev.name), h('span', { class: 'muted' }, `${ev.type === 'score' ? '점수 직접 입력' : '문항 응답 입력(자동 채점)'} · 만점 ${max}점`),
+    h('div', { class: 'row gap' }, h('b', null, ev.name), h('span', { class: 'muted' }, `${ev.type === 'score' ? `점수 직접 입력 · 한 회 만점 ${max}점` : `문항 응답 입력(자동 채점) · 만점 ${max}점`}`),
       h('div', { style: 'flex:1' }), dirtyNote(), h('button', { class: 'sm', onclick: () => { GR.editing = true; redraw(); } }, '설정 수정'),
       h('button', { class: 'primary', onclick: async () => {
-        if (ev.type === 'score' && roster.some((s) => d.scores[s.num] != null && (d.scores[s.num] > max || d.scores[s.num] < 0))) return toast('만점을 넘거나 0보다 작은 점수가 있습니다', true);
+        if (ev.type === 'score' && roster.some((s) => Object.values(rowOf(d, s.num)).some((v) => v > max || v < 0))) return toast('만점을 넘거나 0보다 작은 점수가 있습니다', true);
         try {
           await APP.kvSet(key, d); GR.dirty = false; toast('저장했습니다');
-          const cols = ev.type === 'answers' ? ev.items.map((_, i) => `${i + 1}번`) : [];
-          const hd = ['번호', '이름', ...cols, '총점', ev.cut != null ? '기준 도달' : ''];
-          const body = roster.map((s) => { const t = evalTotal(ev, d, s.num); return [s.num, s.name, ...(ev.type === 'answers' ? ev.items.map((_, i) => (d.answers[s.num] || [])[i] || '') : []), t, ev.cut != null && t != null ? (t >= ev.cut ? '도달' : '미도달') : '']; });
+          const hd = ['번호', '이름', ...evalCols(ev), ev.type === 'score' ? '평균' : '총점', ev.cut != null ? '기준 도달' : ''];
+          const body = roster.map((s) => { const t = evalTotal(ev, d, s.num); return [s.num, s.name, ...evalCells(ev, d, s.num), t == null ? '' : Math.round(t * 10) / 10, ev.cut != null && t != null ? (t >= ev.cut ? '도달' : '미도달') : '']; });
           const answerRow = ev.type === 'answers' ? [['', '정답', ...ev.items.map((i) => i.ans), max, '']] : [];
           exportSheet(ev.name, [hd, ...answerRow, ...body]);
         } catch (e) { toast(errMsg(e), true); }
       } }, '저장')),
     stats,
-    h('div', { class: 'muted', style: 'margin:-4px 0 8px' }, ev.type === 'answers' ? '←→ 옆 문항, ↑↓ 위아래 학생으로 이동해요. (Tab도 됩니다)' : '↑↓ 이전·다음 학생으로 이동해요.'),
+    h('div', { class: 'muted', style: 'margin:-4px 0 8px' }, ev.type === 'answers' ? '←→ 옆 문항, ↑↓ 위아래 학생으로 이동해요. (Tab도 됩니다)' : '↑↓ 이전·다음 학생, ←→ 옆 열로 이동해요. 열 제목을 누르면 잠금/풀림, ✎로 이름 바꾸기. 열을 새로 만들면 앞의 열은 잠겨요.'),
     gridNav(h('div', { class: 'table-wrap' }, h('table', { class: 'roster survey' }, h('thead', null, head), h('tbody', null, rows)))));
 }
 

@@ -334,7 +334,14 @@ async function collectBackup(sel) {
           const max = ev.items.reduce((a, i) => a + (Number(i.pts) || 0), 0);
           out.push({ name: `기타_${ev.name}`, rows: [['번호', '이름', ...ev.items.map((_, i) => `${i + 1}번`), `총점(${max}점)`], ['', '정답', ...ev.items.map((i) => i.ans), ''],
             ...R.map((s) => { const r = (d.answers || {})[s.num] || []; const has = r.some((x) => norm(x) !== ''); return [s.num, s.name, ...ev.items.map((_, i) => r[i] || ''), has ? ev.items.reduce((a, it, i) => a + (norm(r[i]) !== '' && norm(r[i]) === norm(it.ans) ? Number(it.pts) || 0 : 0), 0) : '']; })] });
-        } else out.push({ name: `기타_${ev.name}`, rows: [['번호', '이름', `점수(${ev.max}점)`, ev.cut != null ? `기준 ${ev.cut}점 도달` : ''], ...R.map((s) => { const v = num((d.scores || {})[s.num]); return [s.num, s.name, v, ev.cut != null && v !== '' ? (v >= ev.cut ? '도달' : '미도달') : '']; })] });
+        } else {
+          const cols = ev.cols && ev.cols.length ? ev.cols : [{ id: 'c1', name: '점수' }];
+          const rowOf = (n) => { const o = (d.scores || {})[n]; return o == null ? {} : typeof o === 'object' ? o : { c1: o }; };
+          out.push({ name: `기타_${ev.name}`, rows: [['번호', '이름', ...cols.map((c) => `${c.name}(${ev.max}점)`), '평균', ev.cut != null ? `기준 ${ev.cut}점 도달` : ''], ...R.map((s) => {
+            const r = rowOf(s.num), v = cols.map((c) => num(r[c.id])), ok = v.filter((x) => x !== ''), avg = ok.length ? Math.round(ok.reduce((a, b) => a + b, 0) / ok.length * 10) / 10 : '';
+            return [s.num, s.name, ...v, avg, ev.cut != null && avg !== '' ? (avg >= ev.cut ? '도달' : '미도달') : ''];
+          })] });
+        }
       }
     }
   }
@@ -786,11 +793,14 @@ function pageSubmit() {
   } }, '전체 잠금/해제');
   const fsBtn = h('button', { onclick: () => { document.fullscreenElement ? document.exitFullscreen() : (wrap.requestFullscreen && wrap.requestFullscreen()); } }, '전체화면');
   const cfgBtn = h('button', { onclick: () => subSettings() }, '설정');
-  const bar = h('div', { class: 'sub-bar' }, addBtn, allLock, fsBtn, cfgBtn, saveState, h('span', { class: 'muted' }, '한 번 누르면 제출(회색), 두 번 빠르게 누르면 확인(연두색)'));
+  let showBoard = true; try { showBoard = localStorage.getItem('board_show') !== '0'; } catch (e) { /* 기본 보이기 */ }
+  const boardBtn = h('button', { class: showBoard ? 'primary' : '', onclick: () => { showBoard = !showBoard; try { localStorage.setItem('board_show', showBoard ? '1' : '0'); } catch (e) { /* 저장 안 됨 */ } renderPage(); } }, '학급보드판');
+  const bar = h('div', { class: 'sub-bar' }, addBtn, allLock, fsBtn, cfgBtn, boardBtn, saveState, h('span', { class: 'muted' }, '한 번 누르면 제출(회색), 두 번 빠르게 누르면 확인(연두색)'));
   const C = subCfg();
   const shownName = (st) => (C.mode === 'given' ? givenName(st) : st.name);
   if (C.num) area.classList.add('with-num');
-  wrap.append(bar, area);
+  const boardPanel = showBoard && APP.classBoard ? APP.classBoard.mount({ roster: () => S.roster.slice().sort(byNum), name: (st) => shownName(st) }) : null;
+  wrap.append(bar, h('div', { class: 'sub-split' + (boardPanel ? ' with-board' : '') }, area, boardPanel));
 
   function syncLock(e) {
     const b = e.board;
@@ -798,40 +808,44 @@ function pageSubmit() {
     e.del.disabled = b.locked; e.el.classList.toggle('locked', b.locked);
   }
   function addBoard(b) {
-    const doneSet = new Set(b.done), greenSet = new Set(b.green || []);
+    const doneSet = new Set(b.done), greenSet = new Set(b.green || []); b.doneAt = b.doneAt || {};
+    const stamp = (num, on) => { if (on) b.doneAt[num] = Date.now(); else delete b.doneAt[num]; };
     const count = h('span', { class: 'count' });
     const up = () => { count.textContent = `${doneSet.size + greenSet.size}/${n}`; };
-    const paint = (cell, num) => { cell.classList.toggle('done', doneSet.has(num)); cell.classList.toggle('green', greenSet.has(num)); };
-    const commit = () => { b.done = [...doneSet].sort((x, y) => x - y); b.green = [...greenSet].sort((x, y) => x - y); up(); queueBoardSave(b); };
-    const title = h('input', { class: 'title', value: b.title, placeholder: '과제명', oninput: (ev) => { b.title = ev.target.value; queueBoardSave(b); } });
+    const paint = (cell, num) => {
+      cell.classList.toggle('done', doneSet.has(num)); cell.classList.toggle('green', greenSet.has(num));
+      const t = cell.querySelector('.ts'); if (t) t.textContent = doneSet.has(num) && b.doneAt[num] ? mdw(b.doneAt[num]) : '';
+    };
+    const commit = () => { b.done = [...doneSet].sort((x, y) => x - y); b.green = [...greenSet].sort((x, y) => x - y); up(); queueBoardSave(b); if (APP.classBoard) APP.classBoard.refresh(); };
+    const title = h('input', { class: 'title', value: b.title, placeholder: '과제명', oninput: (ev) => { b.title = ev.target.value; queueBoardSave(b); if (APP.classBoard) APP.classBoard.refresh(); } });
     const lockBtn = h('button', { onclick: () => { b.locked = !b.locked; queueBoardSave(b); syncLock(e); } });
     const del = h('button', { class: 'sm ghost', title: '삭제', onclick: async () => {
       if (!confirm(`"${b.title || '제목 없음'}" 제출판을 삭제할까요?`)) return;
-      try { await api('deleteBoard', { id: b.id }); S.boards = S.boards.filter((x) => x.id !== b.id); entries.splice(entries.indexOf(e), 1); e.el.remove(); syncEmpty(); layout(); }
+      try { await api('deleteBoard', { id: b.id }); S.boards = S.boards.filter((x) => x.id !== b.id); entries.splice(entries.indexOf(e), 1); e.el.remove(); syncEmpty(); layout(); if (APP.classBoard) APP.classBoard.refresh(); }
       catch (x) { toast(errMsg(x), true); }
     } }, '✕');
     const reset = h('button', { class: 'sm ghost', title: '제출 표시 모두 지우기', onclick: () => {
       if (b.locked || !confirm('이 제출판의 제출 표시를 모두 지울까요?')) return;
-      doneSet.clear(); greenSet.clear(); grid.querySelectorAll('.scell').forEach((c) => c.classList.remove('done', 'green')); commit();
+      doneSet.clear(); greenSet.clear(); b.doneAt = {}; grid.querySelectorAll('.scell').forEach((c) => { c.classList.remove('done', 'green'); const t = c.querySelector('.ts'); if (t) t.textContent = ''; }); commit();
     } }, '초기화');
     const grid = h('div', { class: 'sbd-grid', style: `grid-template-columns:repeat(${cols},var(--cw))` }, roster.map((st) => {
       // 글자 크기: 3글자 기준. 1~3글자는 같은 크기, 4글자부터 줄이고, 너무 작아지면 두 줄로
       const nm = shownName(st), L = [...nm].length;
       let r = 1, wrapCls = '';
       if (L > 3) { r = 3 / L; if (r < 0.62) { r = Math.min(1, 3 / Math.ceil(L / 2)); wrapCls = ' wrap2'; } }
-      const cell = h('div', { class: 'scell' + wrapCls, style: `--r:${r.toFixed(3)}` }, C.num ? h('span', { class: 'no' }, st.num) : null, h('span', { class: 'nm' }, nm));
+      const cell = h('div', { class: 'scell' + wrapCls, style: `--r:${r.toFixed(3)}` }, C.num ? h('span', { class: 'no' }, st.num) : null, h('span', { class: 'nm' }, nm), C.ts ? h('span', { class: 'ts' }) : null);
       paint(cell, st.num);
       let tapTimer = null;
       cell.addEventListener('click', () => {
         if (b.locked) return;
         if (tapTimer) {   // 두 번 빠르게 → 연두색(확인)
           clearTimeout(tapTimer); tapTimer = null;
-          doneSet.delete(st.num); greenSet.add(st.num); paint(cell, st.num); commit(); return;
+          doneSet.delete(st.num); stamp(st.num, false); greenSet.add(st.num); paint(cell, st.num); commit(); return;
         }
         tapTimer = setTimeout(() => {   // 한 번 → 노랑↔회색, 연두색이면 회색
           tapTimer = null;
-          if (greenSet.has(st.num)) { greenSet.delete(st.num); doneSet.add(st.num); }
-          else if (doneSet.has(st.num)) doneSet.delete(st.num); else doneSet.add(st.num);
+          if (greenSet.has(st.num)) { greenSet.delete(st.num); doneSet.add(st.num); stamp(st.num, true); }
+          else if (doneSet.has(st.num)) { doneSet.delete(st.num); stamp(st.num, false); } else { doneSet.add(st.num); stamp(st.num, true); }
           paint(cell, st.num); commit();
         }, 260);
       });
@@ -844,7 +858,7 @@ function pageSubmit() {
 
   function layout() {
     const cnt = entries.length;
-    if (!cnt) { area.style.height = 'auto'; area.style.gridTemplateRows = ''; area.style.gridTemplateColumns = '1fr'; return; }
+    if (!cnt) { area.style.height = 'auto'; area.style.gridTemplateRows = ''; area.style.gridTemplateColumns = '1fr'; if (boardPanel) { boardPanel.style.height = Math.max(320, window.innerHeight - boardPanel.getBoundingClientRect().top - (document.fullscreenElement ? 14 : 52)) + 'px'; APP.classBoard.relayout(); } return; }
     const top = area.getBoundingClientRect().top;
     const H = Math.max(220, window.innerHeight - top - (document.fullscreenElement ? 14 : 52)), W = area.clientWidth, GAP = 12, HEAD = 46, PAD = 18, CG = 4;
     let best = null;
@@ -857,10 +871,12 @@ function pageSubmit() {
     }
     const cw = Math.max(14, Math.min(220, Math.floor(best.cw))), ch = Math.max(12, Math.min(150, Math.floor(best.ch)));
     area.style.height = H + 'px';
+    if (boardPanel) { boardPanel.style.height = H + 'px'; APP.classBoard.relayout(); }
     entries.forEach((e) => e.el.classList.toggle('narrow', best.narrow));
     area.style.setProperty('--cw', cw + 'px'); area.style.setProperty('--ch', ch + 'px');
     // 3글자 이름이 칸에 꼭 맞는 글자 크기 (번호를 함께 쓰면 조금 작게)
-    area.style.setProperty('--fsb', Math.max(8, Math.floor(Math.min(cw * 0.28, ch * (C.num ? 0.36 : 0.46)))) + 'px');
+    const lines = (C.num ? 1 : 0) + (C.ts ? 1 : 0);
+    area.style.setProperty('--fsb', Math.max(8, Math.floor(Math.min(cw * 0.28, ch * [0.46, 0.36, 0.3][lines]))) + 'px');
     area.style.gridTemplateColumns = `repeat(${best.c}, minmax(0, 1fr))`;
     area.style.gridTemplateRows = `repeat(${best.r}, minmax(0, 1fr))`;
   }
@@ -872,10 +888,12 @@ function pageSubmit() {
   return wrap;
 }
 window.addEventListener('resize', () => relayoutSub && relayoutSub());
+/* 11월 26일 (목) */
+const mdw = (t) => { const d = new Date(t); return `${d.getMonth() + 1}월 ${d.getDate()}일 (${'일월화수목금토'[d.getDay()]})`; };
 /* 제출확인판 설정: 표기할 이름(성+이름 / 이름만), 번호 표시 */
 function subCfg() {
   if (!S.subCfg) { try { S.subCfg = JSON.parse(localStorage.getItem('sub_cfg') || 'null'); } catch (e) { /* 없음 */ } }
-  return Object.assign({ mode: 'full', num: false }, S.subCfg || {});
+  return Object.assign({ mode: 'full', num: false, ts: false }, S.subCfg || {});
 }
 let subCfgLoaded = false;
 async function loadSubCfg() {
@@ -885,11 +903,13 @@ async function loadSubCfg() {
 function subSettings() {
   const c = subCfg();
   const close = () => ov.remove();
-  const radio = (v, label, desc) => h('label', { class: 'row', style: 'gap:6px;cursor:pointer;margin:4px 0' }, h('input', { type: 'radio', name: 'sbm', checked: c.mode === v, onchange: () => { c.mode = v; } }), h('span', null, label, h('span', { class: 'muted' }, '  ' + desc)));
-  const ov = h('div', { class: 'overlay' }, h('div', { class: 'modal' }, h('h3', null, '제출확인판 설정'),
-    h('div', { style: 'font-weight:600;margin-top:6px' }, '카드에 표기할 이름'),
-    radio('full', '성+이름', '(예: 김민준)'), radio('given', '이름만', '(예: 민준 — 성씨는 학급 기초설정 → 학생 명렬표에서 정해요)'),
-    h('label', { class: 'row', style: 'gap:6px;cursor:pointer;margin-top:10px' }, h('input', { type: 'checkbox', checked: c.num, onchange: (e) => { c.num = e.target.checked; } }), '번호 표시 (이름 위에 작게)'),
+  const radio = (v, label) => h('label', { class: 'opt' }, h('input', { type: 'radio', name: 'sbm', checked: c.mode === v, onchange: () => { c.mode = v; } }), h('span', null, label));
+  const ov = h('div', { class: 'overlay' }, h('div', { class: 'modal sub-cfg' }, h('h3', null, '제출확인판 설정'),
+    h('div', { class: 'opt-title' }, '카드에 표기할 이름'),
+    radio('full', '성+이름 (예: 김민준)'), radio('given', '이름만 (예: 민준)'),
+    h('div', { class: 'opt-title' }, '표시 형식'),
+    h('label', { class: 'opt' }, h('input', { type: 'checkbox', checked: c.num, onchange: (e) => { c.num = e.target.checked; } }), h('span', null, '번호 표시')),
+    h('label', { class: 'opt' }, h('input', { type: 'checkbox', checked: c.ts, onchange: (e) => { c.ts = e.target.checked; } }), h('span', null, '타임스탬프 (제출한 날짜)')),
     h('div', { class: 'row', style: 'justify-content:flex-end;margin-top:14px' }, h('button', { onclick: close }, '취소'),
       h('button', { class: 'primary', onclick: async () => {
         S.subCfg = c; try { localStorage.setItem('sub_cfg', JSON.stringify(c)); } catch (e) { /* 저장 안 됨 */ }

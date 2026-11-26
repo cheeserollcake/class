@@ -6,7 +6,7 @@ const { S, h, api, toast, errMsg, kvGet } = APP;
 
 const ST = { sub: 'input', logs: null, survey: null, date: null, text: '', editId: null,
   kw: '', stu: '', order: 'desc', gsub: 'graph', src: { log: true, survey: true }, round: 'all', thr: 1, sel: null,
-  tone: '', svRound: null, rater: null };
+  tone: '', svRound: null, rater: null, pairEdit: {}, open: { sum: true, det: true, ev: true } };
 APP.onLock.push(() => { ST.logs = null; ST.survey = null; ST.text = ''; ST.editId = null; });
 
 /* ---------- 이름 찾기 (성 없이 "철수", 호칭도 인식) ---------- */
@@ -116,20 +116,108 @@ function sentenceTone(t) {
 const TONE_OF = { '긍정': 1, '부정': -1, '중립': 0 };
 const toneName = (v) => (v > 0 ? '긍정' : v < 0 ? '부정' : '중립');
 /* 한 기록 → { tone: -1|0|1, auto: bool, pairs: Map('a-b' → -1~1) } */
+/* ---------- 사건 속 학생 쌍별 관계 (규칙 기반 분석) ----------
+   예) "철수와 영희가 다퉜다" → 철수–영희 부정 / "길동이가 영희 편을 들었다" → 길동–영희 긍정
+       "영희와 길동이는 철수를 몰아갔다" → 영희–철수, 길동–철수 부정, 영희–길동 같은 편(긍정)
+       "길순이가 셋의 이야기를 들어주고 둘 사이를 달랬다" → 길순–(셋) 긍정 */
+const KW = [
+  ['mneg', /(다투|다퉜|다툼|싸우|싸웠|싸움|의견 ?충돌|갈등|말다툼|언성|신경전|시비)/g, -1],
+  ['neg', /(몰아|놀리|놀렸|놀려|때리|때렸|때려|밀치|밀쳤|밀쳐|괴롭|따돌|비난|욕을|욕했|무시|탓을|탓했|뺏|빼앗|째려|노려|비웃|험담|고자질|이간)/g, -1],
+  ['sup', /(편을 ?들|편들|도와|도왔|도움을 ?주|위로|챙겨|감싸|응원|양보|빌려 ?주|칭찬|격려)/g, 1],
+  ['med', /(중재|달래|말리|말렸|말려|화해시|이야기를 ?들어|얘기를 ?들어|들어 ?주|진정시)/g, 0.5],
+  ['mpos', /(함께 놀|같이 놀|사이좋|사이가 좋|협력|협동|화해|사과|어울려|어울리|친해)/g, 1]
+];
+const PRON = /(둘|셋|넷|세 ?명|두 ?명|네 ?명|모두|다들|그들|이들|서로)/g;
+function roleAt(text, end) {
+  let t = text.slice(end, end + 8);
+  if (/^이(가|는|도|를|와|랑|의|에게|한테)/.test(t)) t = t.slice(1);   // 길동이가, 철수이와(드묾)
+  if (/^(이는|이가)/.test(t)) t = t.slice(1);
+  if (/^\s*(의\s*)?편/.test(t)) return 'tgt';
+  if (/^(은|는)/.test(t)) return 'topic';
+  if (/^(가|도|이)(\s|$|,)/.test(t) || /^가/.test(t)) return 'subj';
+  if (/^(를|을)/.test(t)) return 'obj';
+  if (/^(와|과|랑|하고|이랑)/.test(t)) return 'with';
+  if (/^(에게|한테|께)/.test(t)) return 'tgt';
+  if (/^(의)/.test(t)) return /^의\s*(편|이야기|얘기|말|사이|마음)/.test(t) ? 'tgt' : 'poss';
+  if (/^\s*사이/.test(t)) return 'tgt';
+  return 'none';
+}
+function pairEngine(content, al) {
+  const out = new Map(), ctx = [];   // ctx: 지금까지 나온 학생(순서대로)
+  let last2 = [];
+  const add = (a, b, v) => { if (a === b || !v) return; const k = a < b ? a + '-' + b : b + '-' + a; out.set(k, (out.get(k) || 0) + v); };
+  const sents = String(content).split(/(?<=[.!?。\n])|(?<=[가-힣][함음됨임다])\s+/).map((x) => x.trim()).filter(Boolean);
+  sents.forEach((t) => {
+    const sp = findStudents(t, al).spans.map((x) => ({ start: x.start, end: x.end, nums: x.nums, role: roleAt(t, x.end) }));
+    // 대명사(둘이, 셋의, 둘 사이 …)를 앞에 나온 학생들로 바꾸기
+    let m; PRON.lastIndex = 0;
+    while ((m = PRON.exec(t))) {
+      if (sp.some((x) => m.index >= x.start && m.index < x.end)) continue;
+      const before = [...new Set(sp.filter((x) => !x.pron && x.start < m.index).flatMap((x) => x.nums))];
+      const w = m[1].replace(/\s/g, ''), nums = w === '둘' || w === '두명' ? (before.length >= 2 ? before.slice(-2) : last2.slice(-2)) : w === '셋' || w === '세명' ? ctx.slice(-3) : w === '넷' || w === '네명' ? ctx.slice(-4) : w === '서로' ? null : ctx.slice();
+      if (!nums || nums.length < 2) continue;
+      sp.push({ start: m.index, end: m.index + m[0].length, nums, role: roleAt(t, m.index + m[0].length), pron: true });
+    }
+    sp.sort((x, y) => x.start - y.start);
+    // "A와 B가" → 한 무리(역할은 마지막 이름의 것)
+    const groups = [];
+    sp.forEach((x) => {
+      const g = groups[groups.length - 1];
+      if (g && g.role === 'with' && x.start - g.end <= 3) { g.nums = [...new Set([...g.nums, ...x.nums])]; g.end = x.end; g.role = x.role; }
+      else groups.push({ ...x, nums: x.nums.slice() });
+    });
+    const inSent = [...new Set(groups.flatMap((g) => g.nums))];
+    const each = (A, B, v) => A.forEach((a) => B.forEach((b) => add(a, b, v)));
+    const within = (A, v) => { for (let i = 0; i < A.length; i++) for (let j = i + 1; j < A.length; j++) add(A[i], A[j], v); };
+    const mutual = /서로/.test(t);
+    let fired = false;
+    KW.forEach(([type, re, w]) => {
+      re.lastIndex = 0; let k;
+      while ((k = re.exec(t))) {
+        const ks = k.index, ke = ks + k[0].length;
+        if (/^[가-힣]{0,4}\s?(않|못|안 )/.test(t.slice(ke, ke + 8))) continue;   // ~지 않았다
+        // 주어 찾기: "중재하던 길동이가"처럼 바로 뒤에 꾸밈을 받는 주어 → 문장 앞쪽의 "~는/은" → 가장 가까운 "~이/가"
+        let subj = groups.find((g) => g.start >= ke && g.start - ke <= 10 && (g.role === 'subj' || g.role === 'topic') && /(던|는|한|던\s|는\s|한\s)\s*$/.test(t.slice(ke, g.start)));
+        const rel = !!subj;
+        if (!subj) subj = groups.find((g) => g.role === 'topic' && g.start < ks) || groups.filter((g) => g.role === 'subj' && g.start < ks).pop();
+        const S = subj ? subj.nums : [];
+        const tg = groups.filter((g) => g !== subj && (rel ? g.start > subj.end : (!subj || g.start > subj.start) && g.start < ks) && ['obj', 'tgt', 'with', 'poss'].includes(g.role)).flatMap((g) => g.nums).filter((n) => !S.includes(n));
+        if (type === 'mneg' || type === 'mpos') {
+          const P = [...new Set([...S, ...tg])];
+          if (P.length >= 2) { within(P, w); fired = true; }
+        } else if (type === 'neg') {
+          if (S.length && tg.length) { each(S, tg, w); within(S, 0.5); fired = true; }
+          else if (mutual && S.length >= 2) { within(S, w); fired = true; }
+        } else if (type === 'sup') {
+          if (S.length && tg.length) { each(S, tg, w); fired = true; }
+          else if (mutual && S.length >= 2) { within(S, w); fired = true; }
+        } else if (type === 'med' && S.length) {
+          const T = tg.length ? tg : inSent.filter((n) => !S.includes(n));
+          if (T.length) { each(S, T, w); fired = true; }
+        }
+      }
+    });
+    // 규칙에 안 걸린 단순한 문장(두 명): 문장 전체 분위기를 약하게
+    if (!fired && inSent.length === 2) { const sc = sentenceTone(t); if (Math.abs(sc) >= 0.5) add(inSent[0], inSent[1], Math.sign(sc) * 0.5); }
+    groups.forEach((g) => g.nums.forEach((n) => { const i = ctx.indexOf(n); if (i >= 0) ctx.splice(i, 1); ctx.push(n); }));
+    const named = [...new Set(sp.filter((x) => !x.pron).flatMap((x) => x.nums))];
+    const big = groups.filter((g) => !g.pron && g.nums.length >= 2).pop();
+    if (big) last2 = big.nums.slice(-2); else if (named.length >= 2) last2 = named.slice(-2);
+  });
+  out.forEach((v, k) => out.set(k, Math.max(-1, Math.min(1, v))));
+  return out;
+}
+const PAIR_V = { 1: 1, 0: 0, '-1': -1 };
+APP._pairTest = (text) => [...pairEngine(text, buildAliases()).entries()].map(([k, v]) => k.split('-').map((n) => stuName(n)).join('–') + ' ' + v);   // 시험용
 function analyzeLog(l, al) {
   const sents = String(l.content).split(/(?<=[.!?。\n])|(?<=[가-힣][함음됨임다])\s+/).map((x) => x.trim()).filter(Boolean);
-  const per = sents.map((t) => ({ sc: sentenceTone(t), nums: findStudents(t, al).nums }));
-  const total = per.reduce((a, x) => a + x.sc, 0);
+  const total = sents.reduce((a, t) => a + sentenceTone(t), 0);
   const manual = l.tone && l.tone in TONE_OF;
   const tone = manual ? TONE_OF[l.tone] : Math.abs(total) < 0.5 ? 0 : Math.sign(total);
-  const pairs = new Map();
-  const put = (a, b, v) => { if (a === b || !v) return; const k = a < b ? a + '-' + b : b + '-' + a; const o = pairs.get(k) || 0; if (Math.abs(v) > Math.abs(o)) pairs.set(k, v); };
-  // 같은 문장에 함께 나온 학생: 그 문장의 성격(없으면 기록 전체 성격)
-  per.forEach((x) => { const t = manual ? tone : (Math.abs(x.sc) >= 0.5 ? Math.sign(x.sc) : tone); for (let i = 0; i < x.nums.length; i++) for (let j = i + 1; j < x.nums.length; j++) put(x.nums[i], x.nums[j], t); });
-  // 다른 문장에 따로 나온 학생: 기록 전체 성격의 절반
-  const all = l._nums || [];
-  for (let i = 0; i < all.length; i++) for (let j = i + 1; j < all.length; j++) put(all[i], all[j], tone * 0.5);
-  return { tone, auto: !manual, pairs };
+  const auto = pairEngine(l.content, al), pairs = new Map(auto);
+  // 선생님이 직접 정한 관계가 우선
+  Object.entries(l.pairs || {}).forEach(([k, v]) => { if (v in PAIR_V) { if (PAIR_V[v]) pairs.set(k, PAIR_V[v]); else pairs.delete(k); } });
+  return { tone, auto: !manual, pairs, autoPairs: auto };
 }
 function annotate() {
   const al = buildAliases();
@@ -188,7 +276,22 @@ function viewInput(redraw) {
     chips.replaceChildren(h('span', { class: 'muted' }, r.nums.length ? '인식된 학생:' : '인식된 학생이 없습니다'),
       ...r.nums.map((n) => h('span', { class: 'chip-s ' + APP.gcls(stuOf(n)?.gender) }, `${n} ${stuName(n)}`)));
     warn.textContent = r.ambiguous.length ? `※ "${r.ambiguous.join('", "')}"은(는) 이름이 같은 학생이 여러 명이라 모두 연결돼요. 성까지 쓰면 정확해요.` : '';
-    drawTone();
+    drawTone(); drawPairs();
+  };
+  const pairBox = h('div', { class: 'pair-box' });
+  const drawPairs = () => {
+    const r = findStudents(ta.value, al), nums = r.nums;
+    if (nums.length < 2) { pairBox.replaceChildren(); return; }
+    const auto = pairEngine(ta.value, al), ed = ST.pairEdit, keys = [];
+    for (let i = 0; i < nums.length; i++) for (let j = i + 1; j < nums.length; j++) keys.push(nums[i] + '-' + nums[j]);
+    const show = keys.length <= 15 ? keys : keys.filter((k) => auto.get(k) || k in ed);
+    const eff = (k) => (k in ed ? PAIR_V[ed[k]] : Math.sign(auto.get(k) || 0));
+    pairBox.replaceChildren(h('div', { class: 'row', style: 'justify-content:space-between' }, h('span', { class: 'muted' }, '학생 사이 관계 (자동으로 분석했어요. 틀리면 눌러서 고치세요)'),
+      Object.keys(ed).length ? h('button', { class: 'sm ghost', onclick: () => { ST.pairEdit = {}; drawPairs(); } }, '모두 자동으로') : null),
+      ...show.map((k) => { const [a, b] = k.split('-'), v = eff(k), manual = k in ed;
+        return h('div', { class: 'pair-row' }, h('span', { class: 'pair-nm' }, `${stuName(a)} – ${stuName(b)}`),
+          ...[[1, '긍정'], [0, '중립'], [-1, '부정']].map(([x, n]) => h('button', { type: 'button', class: 'sm pair-btn' + (v === x ? ' on v' + x : ''), onclick: () => { ed[k] = x; drawPairs(); } }, n)),
+          h('span', { class: 'muted pair-src' }, manual ? '직접' : '자동')); }));
   };
   const toneRow = h('div', { class: 'row tone-row' });
   const drawTone = () => {
@@ -205,12 +308,13 @@ function viewInput(redraw) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(ST.date)) return toast('날짜를 확인하세요', true);
     const r = findStudents(content, al);
     const old = ST.editId ? ST.logs.find((l) => l.id === ST.editId) : null;
-    const log = { id: old ? old.id : 'l' + Date.now().toString(36), date: ST.date, content, names: r.nums.map(stuName).join(', '), created: old ? old.created : Date.now(), tone: ST.tone };
+    const log = { id: old ? old.id : 'l' + Date.now().toString(36), date: ST.date, content, names: r.nums.map(stuName).join(', '), created: old ? old.created : Date.now(), tone: ST.tone,
+      pairs: Object.fromEntries(Object.entries(ST.pairEdit).filter(([k]) => k.split('-').every((n) => r.nums.includes(Number(n))))) };
     saveBtn.disabled = true;
     try {
       await api('logSave', { log });
       if (old) Object.assign(old, log); else ST.logs.push(log);
-      ST.text = ''; ST.editId = null; ST.tone = ''; toast('누가기록을 저장했습니다 (구글 시트에도 기록됨)'); redraw();
+      ST.text = ''; ST.editId = null; ST.tone = ''; ST.pairEdit = {}; toast('누가기록을 저장했습니다 (구글 시트에도 기록됨)'); redraw();
     } catch (e) { toast(errMsg(e), true); saveBtn.disabled = false; }
   } }, ST.editId ? '수정 저장' : '기록하기');
 
@@ -220,9 +324,9 @@ function viewInput(redraw) {
       h('div', { class: 'row gap' }, h('label', { class: 'muted' }, '날짜'), dateIn,
         h('button', { class: 'sm ghost', onclick: () => { ST.date = APP.today(); redraw(); } }, '오늘'),
         ST.editId ? h('span', { class: 'banner', style: 'margin:0;padding:4px 10px' }, '기록을 수정하는 중입니다') : null),
-      ta, chips, warn, toneRow,
+      ta, chips, warn, toneRow, pairBox,
       h('div', { class: 'row', style: 'margin-top:10px;justify-content:flex-end' },
-        ST.editId ? h('button', { onclick: () => { ST.editId = null; ST.text = ''; ST.tone = ''; redraw(); } }, '수정 취소') : null, saveBtn)),
+        ST.editId ? h('button', { onclick: () => { ST.editId = null; ST.text = ''; ST.tone = ''; ST.pairEdit = {}; redraw(); } }, '수정 취소') : null, saveBtn)),
     h('div', { class: 'card' }, h('h3', null, `최근 기록 (${ST.logs.length}건 중 ${recent.length}건)`),
       recent.length ? recent.map((l) => logItem(l, '', redraw, true)) : h('div', { class: 'muted' }, '아직 기록이 없습니다.')),
     (upd(), null));
@@ -234,12 +338,13 @@ function logItem(l, kw, redraw, editable) {
         h('span', { class: 'tone-badge t-' + toneName(l._tone), title: l._auto ? '자동 판단 (수정에서 바꿀 수 있어요)' : '선생님이 정한 성격' }, toneName(l._tone) + (l._auto ? '' : ' ✓'))),
       h('span', { class: 'row' }, (l._nums || []).map((n) => h('span', { class: 'chip-s ' + APP.gcls(stuOf(n)?.gender) }, `${n} ${stuName(n)}`)),
         editable ? [
-          h('button', { class: 'sm ghost', onclick: () => { ST.editId = l.id; ST.text = l.content; ST.date = l.date; ST.tone = l.tone || ''; ST.sub = 'input'; redraw(); window.scrollTo(0, 0); } }, '수정'),
+          h('button', { class: 'sm ghost', onclick: () => { ST.editId = l.id; ST.text = l.content; ST.date = l.date; ST.tone = l.tone || ''; ST.pairEdit = { ...(l.pairs || {}) }; ST.sub = 'input'; redraw(); window.scrollTo(0, 0); } }, '수정'),
           h('button', { class: 'sm ghost', onclick: async () => {
             if (!confirm('이 기록을 삭제할까요?')) return;
             try { await api('logDel', { id: l.id }); ST.logs = ST.logs.filter((x) => x.id !== l.id); redraw(); } catch (e) { toast(errMsg(e), true); }
           } }, '삭제')] : null)),
-    h('div', { class: 'log-text' }, highlighted(l.content, l._spans || [], kw)));
+    h('div', { class: 'log-text' }, highlighted(l.content, l._spans || [], kw)),
+    l._pairs && l._pairs.size ? h('div', { class: 'pair-chips' }, [...l._pairs.entries()].map(([k, v]) => { const [a, b] = k.split('-'); return h('span', { class: 'pair-chip ' + (v > 0 ? 'p' : 'n') }, `${stuName(a)}–${stuName(b)} ${v > 0 ? '긍정' : '부정'}`); })) : null);
 }
 
 /* ---------- 2. 사건 검색 ---------- */
@@ -406,6 +511,47 @@ function forceLayout(ids, edges, W, H) {
   return pos;
 }
 
+
+/* ---------- 조사 회차별 추이 ---------- */
+function roundsOrdered() {
+  return ST.survey.main.rounds.map((x, i) => ({ x, i })).sort((a, b) => (a.x.date || '').localeCompare(b.x.date || '') || a.i - b.i).map((o) => o.x);
+}
+const lvAt = (r, a, b) => { const v = ((ST.survey.data[r.id] || {})[a] || {})[b]; return LV_SCORE.hasOwnProperty(v) ? LV_SCORE[v] : null; };
+const pairSeries = (a, b) => roundsOrdered().map((r) => lvAt(r, a, b));
+function slopeOf(vals) {
+  const p = vals.map((v, i) => [i, v]).filter((x) => x[1] != null);
+  if (p.length < 2) return null;
+  const mx = p.reduce((s, x) => s + x[0], 0) / p.length, my = p.reduce((s, x) => s + x[1], 0) / p.length;
+  const num = p.reduce((s, x) => s + (x[0] - mx) * (x[1] - my), 0), den = p.reduce((s, x) => s + (x[0] - mx) ** 2, 0);
+  // 회차 간격 대신 "처음→마지막" 전체 변화량으로 환산
+  return den ? (num / den) * (p[p.length - 1][0] - p[0][0]) : 0;
+}
+const meanOf = (a) => { const v = a.filter((x) => x != null); return v.length ? v.reduce((s, x) => s + x, 0) / v.length : null; };
+/* 추이를 꺾은선 화살표로: 좋아지면 오른쪽 위, 나빠지면 오른쪽 아래, 비슷하면 – */
+function trendMark(vals) {
+  const v = vals.filter((x) => x != null);
+  if (v.length < 2) return null;
+  if (Math.max(...v) - Math.min(...v) < 0.5) return h('span', { class: 'tr-flat', title: '비슷함' }, '–');
+  const NS = 'http://www.w3.org/2000/svg', W = Math.min(64, 12 + 12 * (v.length - 1)), H = 18;
+  const xs = v.map((_, i) => 2 + (i * (W - 8)) / (v.length - 1)), ys = v.map((x) => H - 3 - ((x + 2) / 4) * (H - 6));
+  const d = v[v.length - 1] - v[0], col = d > 0.25 ? '#16a34a' : d < -0.25 ? '#dc2626' : '#6b7280';
+  const svg = document.createElementNS(NS, 'svg'); svg.setAttribute('width', W); svg.setAttribute('height', H); svg.setAttribute('class', 'tr-svg');
+  const pl = document.createElementNS(NS, 'polyline'); pl.setAttribute('points', xs.map((x, i) => `${x},${ys[i]}`).join(' '));
+  pl.setAttribute('fill', 'none'); pl.setAttribute('stroke', col); pl.setAttribute('stroke-width', '1.8'); pl.setAttribute('stroke-linejoin', 'round'); svg.append(pl);
+  const n = v.length - 1, ang = Math.atan2(ys[n] - ys[n - 1], xs[n] - xs[n - 1]), L = 5;
+  const tip = [xs[n], ys[n]], p1 = [tip[0] - L * Math.cos(ang - 0.5), tip[1] - L * Math.sin(ang - 0.5)], p2 = [tip[0] - L * Math.cos(ang + 0.5), tip[1] - L * Math.sin(ang + 0.5)];
+  const head = document.createElementNS(NS, 'polygon'); head.setAttribute('points', `${tip.join(',')} ${p1.join(',')} ${p2.join(',')}`); head.setAttribute('fill', col); svg.append(head);
+  const t = document.createElementNS(NS, 'title'); t.textContent = '회차별: ' + v.map((x) => ({ 2: '좋음', 1: '친해지고 싶음', 0: '그저 그럼', '-2': '싫음' }[x] || x)).join(' → '); svg.append(t);
+  return svg;
+}
+const trendWord = (sl) => (sl == null ? '' : sl >= 0.6 ? '점점 좋아짐' : sl <= -0.6 ? '점점 나빠짐' : '비슷하게 유지');
+function modal(title, ...body) {
+  const ov = h('div', { class: 'overlay', onclick: (e) => { if (e.target === ov) ov.remove(); } },
+    h('div', { class: 'modal rel-modal' }, h('h3', null, title), h('div', { class: 'rel-body' }, ...body),
+      h('div', { class: 'row', style: 'justify-content:flex-end;margin-top:12px' }, h('button', { class: 'primary', onclick: () => ov.remove() }, '닫기'))));
+  document.body.append(ov);
+}
+
 /* 관계 계산: 조사(방향 있음) + 누가기록(긍정/부정) */
 function computeRel() {
   const roster = APP.roster(), ids = roster.map((s) => s.num), idset = new Set(ids);
@@ -446,6 +592,69 @@ function computeRel() {
   return { ids, sDir, lastLv, L, pairPN, pos, neg, edges, rel, useS, useL, chosen };
 }
 
+/* 학급 전체 분석 */
+function classReport(R, st, ids, hasSurvey) {
+  const gOf = (x) => (stuOf(x) || {}).gender, nm = (n) => stuName(n);
+  const rounds = roundsOrdered(), secs = [];
+  const sec = (title, ...items) => secs.push(h('div', { class: 'rel-sec' }, h('h4', null, title), ...items));
+  const li = (t, cls) => h('li', { class: cls || '' }, t);
+  // 1. 전반 상태와 변화
+  if (R.useS && rounds.length) {
+    const per = rounds.map((r) => { const v = []; ids.forEach((a) => ids.forEach((b) => { if (a !== b) { const x = lvAt(r, a, b); if (x != null) v.push(x); } })); return { r, avg: meanOf(v), n: v.length, dis: v.filter((x) => x < 0).length / (v.length || 1) }; }).filter((x) => x.n);
+    const last = per[per.length - 1], first = per[0];
+    const mood = (a) => (a >= 0.9 ? '아주 좋음' : a >= 0.4 ? '대체로 좋음' : a >= 0 ? '보통' : '좋지 않음');
+    const items = [li(`조사 ${per.length}회 · 가장 최근(${last.r.name}) 학급 평균 ${last.avg.toFixed(2)}점 → 분위기 ${mood(last.avg)} ("싫음" 비율 ${Math.round(last.dis * 100)}%)`)];
+    if (per.length >= 2) {
+      const d = last.avg - first.avg;
+      items.push(li(`첫 조사보다 평균이 ${d >= 0 ? '+' : ''}${d.toFixed(2)}점 ${Math.abs(d) < 0.15 ? '— 큰 변화 없음' : d > 0 ? '— 관계가 좋아지는 중' : '— 관계가 나빠지는 중'}`, d <= -0.15 ? 'bad' : d >= 0.15 ? 'good' : ''));
+      const prevR = per[per.length - 2].r; let up = 0, down = 0;
+      ids.forEach((n) => { const a = meanOf(ids.filter((x) => x !== n).map((x) => lvAt(prevR, x, n))), b = meanOf(ids.filter((x) => x !== n).map((x) => lvAt(last.r, x, n))); if (a != null && b != null) { if (b - a >= 0.4) up++; if (b - a <= -0.4) down++; } });
+      items.push(li(`직전 조사와 비교: 받은 평가가 오른 학생 ${up}명, 내려간 학생 ${down}명`));
+    }
+    sec('학급 분위기', h('ul', { class: 'rel-list' }, items));
+    // 2. 남녀 관계
+    const cs = (r, same) => { const v = []; ids.forEach((a) => ids.forEach((b) => { if (a !== b && gOf(a) && gOf(b) && (gOf(a) === gOf(b)) === same) { const x = lvAt(r, a, b); if (x != null) v.push(x); } })); return v; };
+    const sv = cs(last.r, true), xv = cs(last.r, false);
+    if (sv.length && xv.length) {
+      const sa = meanOf(sv), xa = meanOf(xv), xd = xv.filter((x) => x < 0).length / xv.length, sd = sv.filter((x) => x < 0).length / sv.length;
+      const conflict = xa < -0.2 || (xd >= 0.3 && xd > sd * 1.8);
+      const g = [li(`같은 성별끼리 평균 ${sa.toFixed(2)}점 ("싫음" ${Math.round(sd * 100)}%) / 다른 성별끼리 평균 ${xa.toFixed(2)}점 ("싫음" ${Math.round(xd * 100)}%)`)];
+      g.push(li(conflict ? '남녀 사이 관계가 같은 성별 사이보다 뚜렷하게 나빠요. 남녀 갈등이 있는지 살펴볼 필요가 있어요.' : xa < sa - 0.6 ? '남녀가 서로 덜 친한 편이지만 갈등 수준은 아니에요.' : '남녀 사이 관계가 크게 나쁘지 않아요.', conflict ? 'bad' : ''));
+      if (per.length >= 2) { const xf = meanOf(cs(first.r, false)); if (xf != null) { const d = xa - xf; if (Math.abs(d) >= 0.15) g.push(li(`남녀 사이 평가가 첫 조사보다 ${d > 0 ? '좋아졌어요' : '나빠졌어요'} (${d > 0 ? '+' : ''}${d.toFixed(2)}점)`, d < 0 ? 'bad' : 'good')); } }
+      sec('남녀 관계', h('ul', { class: 'rel-list' }, g));
+    }
+  }
+  // 3. 위기 관계
+  const iso = ids.filter((n) => st[n].flags.includes('고립 우려'));
+  const disliked = ids.filter((n) => st[n].flags.includes('싫어하는 친구가 많음'));
+  const worse = ids.filter((n) => st[n].flags.includes('관계가 점점 나빠지고 있음'));
+  const conf = ids.filter((n) => st[n].flags.includes('갈등 사건이 잦음'));
+  const noClose = ids.filter((n) => st[n].flags.includes('가까운 관계가 드러나지 않음') && !iso.includes(n));
+  const bully = disliked.filter((n) => st[n].avg != null && st[n].avg < 0 && st[n].mutual === 0);
+  const crisis = [];
+  if (bully.length) crisis.push(li(`따돌림 우려 (많은 친구가 "싫음"으로 평가하고 서로 좋아하는 친구가 없음): ${bully.map(nm).join(', ')}`, 'bad'));
+  if (iso.length) crisis.push(li(`고립 우려 (서로 좋아하는 친구·가까운 관계가 거의 없음): ${iso.map(nm).join(', ')}`, 'bad'));
+  const dis2 = disliked.filter((n) => !bully.includes(n));
+  if (dis2.length) crisis.push(li(`"싫음"을 많이 받은 학생: ${dis2.map(nm).join(', ')}`, 'bad'));
+  if (worse.length) crisis.push(li(`관계가 점점 나빠지는 학생: ${worse.map(nm).join(', ')}`, 'bad'));
+  if (conf.length) crisis.push(li(`누가기록에 갈등 사건이 잦은 학생: ${conf.map(nm).join(', ')}`, 'bad'));
+  if (noClose.length) crisis.push(li(`가까운 관계가 드러나지 않은 학생: ${noClose.map(nm).join(', ')}`));
+  if (!hasSurvey && R.useS) crisis.push(li('교우관계 조사를 학급의 절반 이상 입력하면 더 정확하게 분석할 수 있어요.'));
+  sec('위기 관계', crisis.length ? h('ul', { class: 'rel-list' }, crisis) : h('div', { class: 'muted' }, '뚜렷한 위기 신호가 보이지 않아요.'));
+  // 4. 관계의 중심
+  const centers = ids.filter((n) => st[n].center);
+  if (centers.length) sec('관계의 중심', h('ul', { class: 'rel-list' }, ['학급 관계의 중심', '여학생 관계의 중심', '남학생 관계의 중심'].map((c) => { const a = centers.filter((n) => st[n].center === c); return a.length ? li(`${c}: ${a.map(nm).join(', ')}`) : null; })),
+    h('div', { class: 'muted' }, '친구들에게 "좋음"을 많이 받은 학생이에요. 모둠 구성이나 학급 활동에서 다른 학생들을 이어 주는 역할을 맡길 수 있어요.'));
+  // 5. 제안
+  const tips = [];
+  if (bully.length || iso.length) tips.push('위기 신호가 있는 학생은 개별 상담으로 마음을 먼저 들어 보고, 필요하면 보호자·상담 선생님과 함께 살펴보세요.');
+  if (iso.length || noClose.length) tips.push('모둠·짝 활동에서 성향이 맞는 친구나 관계의 중심인 학생과 함께하도록 배치해 보세요.');
+  if (secs.some((x) => x.textContent.includes('남녀 갈등'))) tips.push('남녀가 함께하는 협동 활동을 늘리고, 서로 존중하는 말하기를 함께 이야기해 보세요.');
+  if (worse.length) tips.push('관계가 나빠지는 학생은 최근 누가기록을 함께 살펴보세요.');
+  if (tips.length) sec('도움이 될 만한 것', h('ul', { class: 'rel-list' }, tips.map((t) => li(t))));
+  modal('학급 전체 분석', ...secs, h('div', { class: 'muted', style: 'margin-top:8px' }, '조사·기록을 바탕으로 한 참고 자료예요. 실제 판단은 선생님이 직접 관찰한 내용과 함께 해 주세요.'));
+}
+
 function viewSociogram(redraw) {
   const roster = APP.roster(), W = 920, H = 600;
   const R = computeRel(), ids = R.ids;
@@ -472,14 +681,33 @@ function viewSociogram(redraw) {
     const close = posE.filter((e) => e.a === n || e.b === n).length, conflict = negE.filter((e) => e.a === n || e.b === n).length;
     const flags = [];
     if (hasSurvey && rec.length) {
-      if (bad >= Math.max(3, Math.ceil(rec.length * 0.2))) flags.push('싫어하는 친구가 많음');
       if (mutual === 0) flags.push('서로 좋아하는 친구 없음');
       if (avg < 0) flags.push('전반적으로 평가가 낮음');
     }
     if (R.useL && R.neg[n] >= 3 && R.neg[n] > R.pos[n]) flags.push('갈등 사건이 잦음');
     if ((hasSurvey || (R.useL && ST.logs.length >= 10)) && close === 0) flags.push('가까운 관계가 드러나지 않음');
-    st[n] = { avg, good, bad, mutual, close, conflict, flags };
+    // 받은 평가의 회차별 추이
+    const recvSeries = R.useS ? roundsOrdered().map((r) => meanOf(ids.filter((x) => x !== n).map((x) => lvAt(r, x, n)))) : [];
+    const sl = slopeOf(recvSeries);
+    if (hasSurvey && sl != null && sl <= -0.6) flags.push('관계가 점점 나빠지고 있음');
+    if (hasSurvey && rec.length && mutual === 0 && close === 0 && good <= 1) flags.push('고립 우려');
+    st[n] = { avg, good, bad, mutual, close, conflict, flags, sl, recvSeries, center: '', nrec: rec.length };
   });
+  // 학급 안에서 상대적으로 두드러지는 학생만 (모두가 비슷하면 표시하지 않음)
+  if (hasSurvey) {
+    const msd = (k) => { const v = ids.map((n) => st[n][k]); const m = v.reduce((a, b) => a + b, 0) / v.length; return [m, Math.sqrt(v.reduce((a, b) => a + (b - m) ** 2, 0) / v.length)]; };
+    const [mb, sb] = msd('bad'), [mg, sg] = msd('good'), gOf = (x) => (stuOf(x) || {}).gender;
+    ids.forEach((n) => {
+      const x = st[n];
+      if (x.nrec && x.bad >= Math.max(3, Math.ceil(x.nrec * 0.2)) && x.bad >= mb + Math.max(sb, 1)) x.flags.unshift('싫어하는 친구가 많음');
+      // 관계의 중심: "좋음"을 받은 수가 학급에서 눈에 띄게 많은 학생 → 누구에게 받았는지로 학급/여학생/남학생 중심
+      if (x.nrec && x.good >= Math.max(4, mg + Math.max(sg, 1))) {
+        const from = (g) => { const rs = ids.filter((y) => y !== n && gOf(y) === g && R.sDir.has(y + '>' + n)); return rs.length ? rs.filter((y) => R.sDir.get(y + '>' + n) >= 1.5).length / rs.length : 0; };
+        const fm = from('남'), ff = from('여');
+        x.center = fm >= 0.4 && ff >= 0.4 ? '학급 관계의 중심' : ff >= fm ? '여학생 관계의 중심' : '남학생 관계의 중심';
+      }
+    });
+  }
 
   const NS = 'http://www.w3.org/2000/svg';
   const el = (tag, attrs, ...kids) => { const e = document.createElementNS(NS, tag); Object.entries(attrs || {}).forEach(([k, v]) => e.setAttribute(k, v)); kids.forEach((c) => e.append(c)); return e; };
@@ -529,9 +757,10 @@ function viewSociogram(redraw) {
       R.useS ? [h('td', null, x.avg == null ? '-' : x.avg.toFixed(1)), h('td', null, x.good), h('td', null, x.bad), h('td', null, x.mutual)] : null,
       R.useL ? [h('td', null, R.pos[s.num]), h('td', null, R.neg[s.num])] : null,
       h('td', null, x.close), h('td', null, x.conflict),
-      h('td', { style: 'text-align:left' }, x.flags.length ? h('b', { style: 'color:var(--danger)' }, x.flags.join(', ')) : ''));
+      h('td', { style: 'text-align:left' }, x.flags.length ? h('b', { style: 'color:var(--danger)' }, x.flags.join(', ')) : '', x.center ? h('span', { class: 'rel-center' }, x.center) : null));
   });
-  const table = h('div', { class: 'card' }, h('h3', null, '관계 요약'),
+  const fold = (key, title, ...body) => h('details', { class: 'card fold', open: ST.open[key] ? '' : null, ontoggle: (e) => { ST.open[key] = e.target.open; } }, h('summary', null, h('h3', null, title)), ...body);
+  const table = fold('sum', '관계 요약',
     h('div', { class: 'table-wrap' }, h('table', { class: 'roster survey' }, h('thead', null, h('tr', null, cols.map((t) => h('th', null, t)))), h('tbody', null, rows))),
     h('div', { class: 'muted', style: 'margin-top:6px;line-height:1.6' },
       (R.useS ? '받은 평가 평균: 좋음 +2, 친해지고 싶음 +1, 그저 그럼 0, 싫음 -2. ' : '') +
@@ -542,23 +771,38 @@ function viewSociogram(redraw) {
   if (sel != null && ids.includes(sel)) {
     const lvName = (v) => (LEVELS.find((x) => x[0] === v) || [0, '-'])[1];
     const lvTag = (v) => v ? h('span', { class: 'lv-tag', style: `--c:${LEVELS.find((x) => x[0] === v)[2]}` }, lvName(v)) : h('span', { class: 'muted' }, '-');
+    const cellTr = (v, series) => { const m = trendMark(series); return h('td', null, h('span', { class: 'tr-cell' }, lvTag(v), m ? h('span', { class: 'tr-paren' }, '(', m, ')') : null)); };
     const others = roster.filter((f) => f.num !== sel).map((f) => ({ f, r: R.rel(sel, f.num) })).sort((a, b) => (b.r ?? -0.001) - (a.r ?? -0.001));
     const k = (a, b) => (a < b ? a + '-' + b : b + '-' + a);
     const relRows = others.filter((o) => o.r != null).map(({ f, r }) => { const pn = R.pairPN.get(k(sel, f.num)) || [0, 0];
       return h('tr', { class: APP.gcls(f.gender) }, h('td', null, `${f.num} ${f.name}`),
-        R.useS ? [h('td', null, lvTag(R.lastLv.get(sel + '>' + f.num))), h('td', null, lvTag(R.lastLv.get(f.num + '>' + sel)))] : null,
+        R.useS ? [cellTr(R.lastLv.get(sel + '>' + f.num), pairSeries(sel, f.num)), cellTr(R.lastLv.get(f.num + '>' + sel), pairSeries(f.num, sel))] : null,
         R.useL ? [h('td', null, pn[0] || ''), h('td', null, pn[1] || '')] : null,
-        h('td', null, h('b', { style: `color:${r >= 0.5 ? '#2f6fed' : r <= -0.5 ? 'var(--danger)' : 'inherit'}` }, r >= 1.5 ? '아주 가까움' : r >= 0.5 ? '가까움' : r <= -1.5 ? '갈등 큼' : r <= -0.5 ? '갈등' : '보통')));
+        h('td', null, h('b', { style: `color:${r >= 0.5 ? '#2f6fed' : r <= -0.5 ? 'var(--danger)' : 'inherit'}` }, r >= 1.5 ? '아주 가까움' : r >= 0.5 ? '가까움' : r <= -1.5 ? '갈등 큼' : r <= -0.5 ? '갈등' : '보통'),
+          (() => { if (!R.useS) return null; const a = pairSeries(sel, f.num), b = pairSeries(f.num, sel); const w = trendWord(slopeOf(a.map((x, i) => meanOf([x, b[i]])))); return w ? h('div', { class: 'tr-word ' + (w.includes('좋아') ? 'up' : w.includes('나빠') ? 'down' : '') }, w) : null; })()));
     });
     const evs = R.useL ? sortedLogs('desc').filter((l) => l._nums.includes(sel)) : [];
-    detail = h('div', { class: 'card' }, h('h3', null, `${sel}번 ${stuName(sel)} 학생`),
+    detail = h('div', null, fold('det', `${sel}번 ${stuName(sel)} 학생의 관계`,
       st[sel].flags.length ? h('div', { class: 'banner warn', style: 'margin-bottom:8px' }, '살펴볼 점: ' + st[sel].flags.join(', ')) : null,
+      st[sel].center ? h('div', { class: 'banner', style: 'margin-bottom:8px' }, `${st[sel].center}: 많은 친구들이 "좋음"으로 평가한 학생이에요.`) : null,
       relRows.length ? h('div', { class: 'table-wrap' }, h('table', { class: 'roster survey' },
         h('thead', null, h('tr', null, ['친구'].concat(R.useS ? ['이 학생이 준 평가', '친구에게 받은 평가'] : [], R.useL ? ['긍정 사건', '부정 사건'] : [], ['종합']).map((t) => h('th', null, t)))),
         h('tbody', null, relRows))) : h('div', { class: 'muted' }, '드러난 관계가 없어요.'),
-      R.useS && R.chosen.length > 1 ? h('div', { class: 'muted', style: 'margin-top:4px' }, '평가는 가장 최근 조사 기준으로 보여 줘요.') : null,
-      evs.length ? [h('h3', { style: 'margin-top:14px' }, `관련 사건 ${evs.length}건`), evs.map((l) => logItem(l, '', redraw, false))] : null);
+      R.useS && ST.survey.main.rounds.length > 1 ? h('div', { class: 'muted', style: 'margin-top:4px' }, '평가는 가장 최근 조사 기준이에요. 괄호 안 꺾은선은 지금까지 조사한 회차별 변화예요. (초록: 좋아짐, 빨강: 나빠짐, –: 비슷함)') : null,
+      st[sel].sl != null ? h('div', { class: 'muted', style: 'margin-top:2px' }, `친구들에게 받은 평가 평균의 변화: ${trendWord(st[sel].sl)}`) : null,
+      ), evs.length ? fold('ev', `관련 사건 ${evs.length}건`, evs.map((l) => logItem(l, '', redraw, false))) : null);
   }
-  return h('div', null, controls, h('div', { class: 'card' }, svg), detail, table);
+  const helpBtn = h('button', { class: 'sm', onclick: () => modal('관계도 보는 방법',
+    h('ul', { class: 'rel-list' },
+      h('li', null, '동그라미 하나가 학생 한 명이에요. 파랑은 남학생, 분홍은 여학생이에요.'),
+      h('li', null, h('b', { style: 'color:#2f6fed' }, '파란 실선'), '은 가까운 관계, ', h('b', { style: 'color:#e5484d' }, '빨간 점선'), '은 갈등이나 멀어진 관계예요. 선이 굵을수록 관계가 강해요.'),
+      h('li', null, '서로 가까운 학생들은 가운데로 모이고, 연결이 적은 학생은 바깥이나 아래쪽에 놓여요.'),
+      h('li', null, h('b', { style: 'color:#f59e0b' }, '주황 테두리'), '는 "살펴볼 점"이 있는 학생이에요.'),
+      h('li', null, '교우관계 조사는 좋음 +2, 친해지고 싶음 +1, 그저 그럼 0, 싫음 −2로 바꿔 계산해요. 조사가 여러 번이면 최근 조사를 더 무겁게 봐요.'),
+      h('li', null, '누가기록은 같이 나온 횟수가 아니라 사건의 성격(긍정·부정)으로 반영해요.'),
+      h('li', null, '학생을 누르면 친구별 평가와 회차별 변화(괄호 안 꺾은선 화살표)를 볼 수 있어요.'),
+      h('li', null, '모든 분석은 참고용이에요. 학생을 직접 관찰한 선생님의 판단이 가장 정확해요.'))) }, '관계도 보는 방법');
+  const classBtn = h('button', { class: 'sm primary', onclick: () => classReport(R, st, ids, hasSurvey) }, '학급 전체 분석');
+  return h('div', null, controls, h('div', { class: 'card' }, svg, h('div', { class: 'row', style: 'gap:8px;margin-top:8px' }, helpBtn, classBtn)), detail, table);
 }
 })();

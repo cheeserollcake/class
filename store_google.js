@@ -61,10 +61,10 @@ const A = (name, range) => encodeURIComponent(`'${name}'` + (range ? '!' + range
 /* ---------------- 스프레드시트 준비 ---------------- */
 const T = {
   roster: { name: '명렬표', headers: ['번호', '이름', '성별', '연락처', '생년월일', '특기사항', '호칭', '비고1', '비고2', '비고3', '성씨'], cols: 'K' },
-  boards: { name: '제출확인', headers: ['id', '제목', '잠금', '제출번호', '생성', '확인번호'], cols: 'F' },
+  boards: { name: '제출확인', headers: ['id', '제목', '잠금', '제출번호', '생성', '확인번호', '제출시각'], cols: 'G' },
   settings: { name: '설정', headers: ['key', 'value'], cols: 'B' },
   data: { name: '데이터', headers: ['key', 'value', 'updated'], cols: 'C' },
-  logs: { name: '누가기록', headers: ['id', '날짜', '내용', '등장학생', '기록시각', '사건 성격'], cols: 'F' }
+  logs: { name: '누가기록', headers: ['id', '날짜', '내용', '등장학생', '기록시각', '사건 성격', '관계'], cols: 'G' }
 };
 const ROSTER_KEYS = ['num', 'name', 'gender', 'phone', 'birth', 'note', 'title', 'b1', 'b2', 'b3', 'surname'];
 let ssId = '', sheetIds = {}, folderId = '', ready = null, chain = Promise.resolve();
@@ -108,7 +108,7 @@ async function readAll() {
 }
 /* 예전에 만든 시트에 새 머리글(예: 누가기록 '사건 성격')을 한 번만 채워 넣기 */
 async function fixHeaders() {
-  const flag = 'classapp_hdr3_' + ssId;
+  const flag = 'classapp_hdr5_' + ssId;
   if (localStorage.getItem(flag)) return;
   for (const k of ['logs', 'roster', 'boards']) await gf(`${SHEETS}/${ssId}/values/${A(T[k].name, 'A1')}?valueInputOption=RAW`, jsonOpt('PUT', { values: [T[k].headers] }));
   localStorage.setItem(flag, '1');
@@ -168,7 +168,7 @@ function readRoster(full) {
   });
   return out;
 }
-const readBoards = () => rows.boards.filter((r) => r[0] !== '').map((r) => { let done = []; try { done = JSON.parse(r[3] || '[]'); } catch (e) { /* 빈 값 */ } let green = []; try { green = JSON.parse(r[5] || '[]'); } catch (e) { /* 빈 값 */ } return { id: r[0], title: r[1], locked: r[2] === 'Y', done, green, created: Number(r[4]) || 0 }; });
+const readBoards = () => rows.boards.filter((r) => r[0] !== '').map((r) => { let done = []; try { done = JSON.parse(r[3] || '[]'); } catch (e) { /* 빈 값 */ } let green = [], doneAt = {}; try { green = JSON.parse(r[5] || '[]'); } catch (e) { /* 빈 값 */ } try { doneAt = JSON.parse(r[6] || '{}'); } catch (e) { /* 빈 값 */ } return { id: r[0], title: r[1], locked: r[2] === 'Y', done, green, doneAt, created: Number(r[4]) || 0 }; });
 
 const kvRows = () => rows.data;
 async function importDemo(db) {
@@ -177,8 +177,8 @@ async function importDemo(db) {
   if (db.pw && db.pw !== DEFAULT_PW) { const salt = (crypto.randomUUID ? crypto.randomUUID() : String(Math.random())); await setSetting('salt', salt); await setSetting('pwHash', await sha256(salt + ':' + db.pw)); }
   await replaceAll('roster', (db.roster || []).map((r) => ROSTER_KEYS.map((k) => (r[k] == null ? '' : String(r[k]).slice(0, 500)))));
   if (db.seat) await setSetting('seat', JSON.stringify(db.seat));
-  for (const b of db.boards || []) await upsert('boards', 0, [String(b.id), String(b.title || ''), b.locked ? 'Y' : 'N', JSON.stringify(b.done || []), String(b.created || Date.now()), JSON.stringify(b.green || [])]);
-  await replaceAll('logs', (db.logs || []).map((l) => [String(l.id), String(l.date), String(l.content || ''), String(l.names || ''), String(l.created || Date.now()), String(l.tone || '')]));
+  for (const b of db.boards || []) await upsert('boards', 0, [String(b.id), String(b.title || ''), b.locked ? 'Y' : 'N', JSON.stringify(b.done || []), String(b.created || Date.now()), JSON.stringify(b.green || []), JSON.stringify(b.doneAt || {})]);
+  await replaceAll('logs', (db.logs || []).map((l) => [String(l.id), String(l.date), String(l.content || ''), String(l.names || ''), String(l.created || Date.now()), String(l.tone || ''), JSON.stringify(l.pairs || {})]));
   const idMap = {};
   for (const [id, f] of Object.entries(db.files || {})) { try { idMap[id] = (await upload(f.data, f.mime, f.name)).fileId; } catch (e) { /* 파일 하나 실패해도 계속 */ } }
   const kv = Object.entries(db.kv || {}).map(([k, v]) => {
@@ -281,7 +281,7 @@ async function handle(action, d) {
     }
     case 'saveBoard': {
       const b = d.board; if (!b || !b.id) throw new Error('BAD');
-      await upsert('boards', 0, [String(b.id), String(b.title || '').slice(0, 200), b.locked ? 'Y' : 'N', JSON.stringify(b.done || []), String(b.created || Date.now()), JSON.stringify(b.green || [])]); return { ok: true };
+      await upsert('boards', 0, [String(b.id), String(b.title || '').slice(0, 200), b.locked ? 'Y' : 'N', JSON.stringify(b.done || []), String(b.created || Date.now()), JSON.stringify(b.green || []), JSON.stringify(b.doneAt || {})]); return { ok: true };
     }
     case 'deleteBoard': await removeRow('boards', 0, String(d.id)); return { ok: true };
     case 'kvGet': {
@@ -300,10 +300,10 @@ async function handle(action, d) {
       await upsert('data', 0, [key, v, String(Date.now())]); return { ok: true };
     }
     case 'kvDel': { const key = String(d.key || ''); if (isProt(key)) await checkPw(d.pw); await removeRow('data', 0, key); return { ok: true }; }
-    case 'logsLoad': await checkPw(d.pw); return { ok: true, logs: rows.logs.filter((r) => r[0] !== '').map((r) => ({ id: r[0], date: r[1], content: r[2], names: r[3], created: Number(r[4]) || 0, tone: r[5] || '' })) };
+    case 'logsLoad': await checkPw(d.pw); return { ok: true, logs: rows.logs.filter((r) => r[0] !== '').map((r) => ({ id: r[0], date: r[1], content: r[2], names: r[3], created: Number(r[4]) || 0, tone: r[5] || '', pairs: (() => { try { return JSON.parse(r[6] || '{}'); } catch (e) { return {}; } })() })) };
     case 'logSave': {
       await checkPw(d.pw); const l = d.log; if (!l || !l.id || !/^\d{4}-\d{2}-\d{2}$/.test(String(l.date))) throw new Error('BAD');
-      await upsert('logs', 0, [String(l.id), String(l.date), String(l.content || '').slice(0, 5000), String(l.names || '').slice(0, 500), String(l.created || Date.now()), String(l.tone || '')]); return { ok: true };
+      await upsert('logs', 0, [String(l.id), String(l.date), String(l.content || '').slice(0, 5000), String(l.names || '').slice(0, 500), String(l.created || Date.now()), String(l.tone || ''), JSON.stringify(l.pairs || {}).slice(0, 2000)]); return { ok: true };
     }
     case 'logDel': await checkPw(d.pw); await removeRow('logs', 0, String(d.id)); return { ok: true };
     case 'clearData': await checkPw(d.pw); return clearData(d.targets || []);
