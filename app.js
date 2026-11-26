@@ -42,11 +42,12 @@ const ERR = {
   DENIED: '구글이 접근을 허용하지 않았어요. 다시 로그인해 보세요.',
   TOOBIG: '파일이나 내용이 너무 커서 저장할 수 없어요.',
   PW: '비밀번호가 맞지 않습니다.',
-  LOCKED: '5번 틀려서 5분간 잠겼습니다. 잠시 후 다시 시도하세요.',
+  LOCKED: '비밀번호를 여러 번 틀려서 잠시 잠겼습니다.',
   SHORT: '비밀번호는 6자 이상이어야 합니다.',
+  WEAK: '너무 쉬운 비밀번호예요. (같은 글자 반복, 123456 같은 것은 안 돼요)',
   BAD: '저장할 수 없는 데이터입니다.'
 };
-const errMsg = (e) => ERR[e.message] || ('오류: ' + e.message);
+const errMsg = (e) => (e.message === 'LOCKED' && e.wait ? `비밀번호를 여러 번 틀려서 잠겼습니다. ${e.wait}분 뒤에 다시 해 보세요.` : ERR[e.message] || ('오류: ' + e.message));
 
 /* ---------- 상태 ---------- */
 const defaultSeat = () => ({ cols: 6, rows: 5, cells: Array(30).fill(1), gw: 2, gh: 1, colNames: [], mode: 'mixed', teams: [], teamBalance: false, fixed: [], avoid: [], noRepeat: 0 });
@@ -54,7 +55,7 @@ const normSeat = (x) => { const o = Object.assign(defaultSeat(), x || {}); if (o
 const S = {
   token: null, email: '', unlocked: false, pw: '', defaultPw: true,
   roster: [], seat: defaultSeat(), boards: [],
-  tab: 'submit', setupSub: 'roster',
+  tab: 'board', setupSub: 'roster',
   rosterDraft: null, rosterDirty: false, showPaste: false, showUpload: false,
   seatDraft: null, seatUi: { editMode: 'move', sel: null, pick: null },
   curBoard: null, saveText: ''
@@ -118,7 +119,7 @@ function demoApi(action, d) {
       else if (action === 'unlock') { chk(); out = { ok: true, roster: db.roster, defaultPw: db.defaultPw }; }
       else if (action === 'saveRoster') { chk(); db.roster = d.rows; }
       else if (action === 'saveSeat') { chk(); db.seat = d.seat; }
-      else if (action === 'changePw') { chk(); if (String(d.newPw).length < 6) throw new Error('SHORT'); db.pw = d.newPw; db.defaultPw = false; }
+      else if (action === 'changePw') { chk(); if (String(d.newPw).length < 6) throw new Error('SHORT'); if (/^(.)\1+$/.test(d.newPw) || ['123456', '654321', '000000', '111111', '12345678'].includes(String(d.newPw))) throw new Error('WEAK'); db.pw = d.newPw; db.defaultPw = false; }
       else if (action === 'saveBoard') { const i = db.boards.findIndex((b) => b.id === d.board.id); if (i >= 0) db.boards[i] = d.board; else db.boards.push(d.board); }
       else if (action === 'deleteBoard') db.boards = db.boards.filter((b) => b.id !== d.id);
       else if (action === 'kvGet') { if (d.keys.some(prot)) chk(); out = { ok: true, values: Object.fromEntries(d.keys.map((k) => [k, db.kv[k] == null ? null : db.kv[k].v])) }; }
@@ -210,11 +211,59 @@ async function startApp() {
     if (!DEMO && await maybeImportDemo(j)) return startApp();
     S.email = j.email; S.roster = j.roster || []; S.seat = normSeat(j.seat); S.boards = j.boards || []; S.defaultPw = j.defaultPw;
     if (!S.curBoard && S.boards.length) S.curBoard = S.boards[0].id;
-    renderShell();
+    renderShell(); loadIcon();
   } catch (e) {
     if (DEMO) { root.textContent = errMsg(e); return; }
     showLogin(errMsg(e));
   }
+}
+
+/* ---------- 사이트 아이콘 (데이터 관리에서 바꾸기) ---------- */
+const ICON_DEF = {};
+function applyIcon(url) {
+  document.querySelectorAll('link[rel~="icon"], link[rel="apple-touch-icon"]').forEach((l, i) => {
+    if (!(i in ICON_DEF)) ICON_DEF[i] = { href: l.getAttribute('href'), type: l.getAttribute('type') };
+    if (url) { l.href = url; l.removeAttribute('type'); l.removeAttribute('sizes'); }
+    else { l.setAttribute('href', ICON_DEF[i].href); if (ICON_DEF[i].type) l.setAttribute('type', ICON_DEF[i].type); }
+  });
+}
+function cacheIcon(url) { try { url ? localStorage.setItem('site_icon', url) : localStorage.removeItem('site_icon'); } catch (e) { /* 저장 안 됨 */ } }
+try { const c = localStorage.getItem('site_icon'); if (c && /^data:image\//.test(c)) applyIcon(c); } catch (e) { /* 없음 */ }
+async function loadIcon() {
+  try { const v = await kvGet(['site:icon']); const u = v['site:icon'] && v['site:icon'].url; if (u && /^data:image\//.test(u)) { applyIcon(u); cacheIcon(u); } else { applyIcon(null); cacheIcon(null); } } catch (e) { /* 기본 아이콘 */ }
+}
+async function makeIcon(file) {
+  const url = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r.readAsDataURL(file); });
+  const img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = url; });
+  const s = Math.min(img.naturalWidth, img.naturalHeight), cv = document.createElement('canvas'); cv.width = cv.height = 192;   // 가운데를 정사각형으로 잘라 192px
+  const cx = cv.getContext('2d'); cx.imageSmoothingQuality = 'high';
+  cx.drawImage(img, (img.naturalWidth - s) / 2, (img.naturalHeight - s) / 2, s, s, 0, 0, 192, 192);
+  let out = cv.toDataURL('image/png');
+  if (out.length > 40000) out = cv.toDataURL('image/webp', 0.9);
+  if (out.length > 40000) out = cv.toDataURL('image/jpeg', 0.9);
+  return out;
+}
+function iconEditor() {
+  const box = h('div', { class: 'card icon-card', style: 'max-width:760px;margin-bottom:12px' });
+  const fileIn = h('input', { type: 'file', accept: 'image/*', hidden: true, onchange: async (e) => {
+    const f = e.target.files[0]; e.target.value = ''; if (!f) return;
+    if (!/^image\//.test(f.type)) return toast('이미지 파일만 쓸 수 있어요', true);
+    try { const u = await makeIcon(f); await APP.kvSet('site:icon', { url: u, at: Date.now() }); applyIcon(u); cacheIcon(u); toast('사이트 아이콘을 바꿨어요'); draw(); }
+    catch (er) { toast(errMsg(er), true); }
+  } });
+  const draw = () => {
+    let cur = ''; try { cur = localStorage.getItem('site_icon') || ''; } catch (e) { /* 없음 */ }
+    box.replaceChildren(h('h3', null, '사이트 아이콘'),
+      h('div', { class: 'icon-row' },
+        h('img', { class: 'icon-prev', src: cur || 'icons/icon-192.png', alt: '지금 아이콘' }),
+        h('div', { class: 'muted', style: 'flex:1;line-height:1.6;font-size:13px' }, '정사각형 이미지가 가장 좋아요(아니면 가운데를 잘라 써요). 브라우저 탭과 즐겨찾기 아이콘이 바로 바뀌어요. 홈 화면에 이미 추가한 아이콘은 지우고 다시 추가해야 바뀌어요.'),
+        h('div', { class: 'row', style: 'gap:6px' },
+          h('button', { class: 'primary', onclick: () => fileIn.click() }, '이미지 고르기'),
+          cur ? h('button', { onclick: async () => { try { await APP.kvSet('site:icon', { url: '' }); applyIcon(null); cacheIcon(null); toast('기본 아이콘으로 돌렸어요'); draw(); } catch (er) { toast(errMsg(er), true); } } }, '기본 아이콘') : null)),
+      fileIn);
+  };
+  draw();
+  return box;
 }
 
 /* ---------- 껍데기 / 내비게이션 ---------- */
@@ -245,6 +294,8 @@ function go(id) {
   if (leaving && S.rosterDirty && !confirm('저장하지 않은 명렬표 변경이 있습니다. 이동할까요?')) return;
   const t = TABS.find((x) => x.id === id);
   if (t.pw && !S.unlocked) return askPw(() => go(id));
+  // 초기 비밀번호(000000)로는 다른 잠긴 메뉴를 쓸 수 없게 → 먼저 바꾸게 함
+  if (t.pw && S.defaultPw && !DEMO && !(id === 'setup' && S.setupSub === 'pw')) { S.setupSub = 'pw'; S.tab = 'setup'; toast('초기 비밀번호(000000)를 먼저 바꿔 주세요'); renderShell(); return; }
   if (leaving) { S.rosterDraft = null; S.rosterDirty = false; S.seatDraft = null; }
   S.tab = id; renderShell();
 }
@@ -261,10 +312,10 @@ function lock() {
   S.unlocked = false; S.pw = ''; S.rosterDraft = null; S.rosterDirty = false; S.seatDraft = null;
   S.roster = S.roster.map((x) => ({ num: x.num, name: x.name, gender: x.gender, surname: x.surname || '' }));
   APP.onLock.forEach((f) => f());
-  if (TABS.find((x) => x.id === S.tab).pw) S.tab = 'submit';
+  if (TABS.find((x) => x.id === S.tab).pw) S.tab = 'board';
   renderShell();
 }
-function logout() { S.token = null; location.reload(); }
+function logout() { S.token = null; S.pw = ''; try { APP.google && APP.google.logout && APP.google.logout(); } catch (e) { /* 무시 */ } setTimeout(() => location.reload(), 150); }
 function askPw(onOk) {
   const err = h('div', { class: 'err' });
   const input = h('input', { type: 'password', placeholder: '비밀번호', autocomplete: 'off' });
@@ -285,7 +336,13 @@ function askPw(onOk) {
   document.body.append(ov); input.focus();
 }
 let lastAct = Date.now();
-['click', 'keydown'].forEach((ev) => document.addEventListener(ev, () => { lastAct = Date.now(); }));
+['click', 'keydown', 'touchstart'].forEach((ev) => document.addEventListener(ev, () => { lastAct = Date.now(); }, { passive: true }));
+// 다른 탭·앱으로 2분 넘게 나가 있다 돌아오면 비밀번호 메뉴를 잠금
+let hiddenAt = 0;
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) { hiddenAt = Date.now(); return; }
+  if (S.unlocked && !S.rosterDirty && hiddenAt && Date.now() - hiddenAt > 2 * 60 * 1000) { lock(); toast('자리를 비워서 잠갔습니다'); }
+});
 setInterval(() => { if (S.unlocked && !S.rosterDirty && Date.now() - lastAct > 10 * 60 * 1000) { lock(); toast('10분간 사용이 없어 잠갔습니다'); } }, 30000);
 
 /* =====================================================
@@ -293,10 +350,11 @@ setInterval(() => { if (S.unlocked && !S.rosterDirty && Date.now() - lastAct > 1
    ===================================================== */
 function pageSetup() {
   const subs = [['roster', '학생 명렬표'], ['seat', '학급 자리 배치'], ['pw', '비밀번호 변경'], ['data', '데이터 관리']];
+  if (S.defaultPw && !DEMO) S.setupSub = 'pw';
   const wrap = h('div', null,
-    S.defaultPw ? h('div', { class: 'banner warn' }, '초기 비밀번호(000000)를 사용 중입니다. "비밀번호 변경"에서 바꿔 주세요.') : null,
+    S.defaultPw ? h('div', { class: 'banner warn' }, DEMO ? '초기 비밀번호(000000)를 사용 중입니다. "비밀번호 변경"에서 바꿔 주세요.' : '안전을 위해 초기 비밀번호(000000)를 먼저 바꿔야 다른 메뉴를 쓸 수 있어요.') : null,
     h('div', { class: 'tabs' }, subs.map(([id, name]) => h('button', { class: 'tab' + (S.setupSub === id ? ' active' : ''), onclick: () => { S.setupSub = id; renderPage(); } }, name))));
-  wrap.append(S.setupSub === 'roster' ? rosterEditor() : S.setupSub === 'seat' ? seatEditor() : S.setupSub === 'data' ? dataEditor() : pwEditor());
+  wrap.append(S.setupSub === 'roster' ? rosterEditor() : S.setupSub === 'seat' ? seatEditor() : S.setupSub === 'data' ? h('div', null, iconEditor(), dataEditor()) : pwEditor());
   return wrap;
 }
 
@@ -604,6 +662,7 @@ function pwEditor() {
   const b = h('input', { type: 'password', placeholder: '새 비밀번호 확인', autocomplete: 'new-password' });
   return h('div', { class: 'card', style: 'max-width:420px' },
     h('h3', null, '비밀번호 변경'),
+    h('div', { class: 'muted', style: 'font-size:13px;margin-bottom:8px' }, '학생이 짐작하기 어려운 6자 이상으로 정해 주세요. 같은 숫자 반복이나 123456은 안 돼요.'),
     h('div', { class: 'field' }, a), h('div', { class: 'field' }, b),
     h('button', { class: 'primary', onclick: async () => {
       if (a.value.length < 6) return toast(ERR.SHORT, true);

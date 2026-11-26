@@ -38,6 +38,10 @@ async function login(opts) {
   return { email, changed: !!prev && prev !== email };
 }
 const hasToken = () => !!token && Date.now() < tokenExp;
+function logout() {
+  const t = token; token = ''; tokenExp = 0; email = '';
+  try { if (t && window.google && google.accounts && google.accounts.oauth2) google.accounts.oauth2.revoke(t, () => {}); } catch (e) { /* 무시 */ }
+}
 
 /* ---------------- 구글 요청 ---------------- */
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -145,15 +149,44 @@ async function sha256(s) {
   if (window.crypto && crypto.subtle) { const b = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s)); return [...new Uint8Array(b)].map((x) => x.toString(16).padStart(2, '0')).join(''); }
   let h1 = 0x811c9dc5; for (const ch of s) { h1 ^= ch.charCodeAt(0); h1 = Math.imul(h1, 16777619) >>> 0; } return 'f' + h1.toString(16);
 }
-let fails = 0, lockUntil = 0;
-async function checkPw(pw) {
-  if (fails >= 5 && Date.now() < lockUntil) throw new Error('LOCKED');
-  if (fails >= 5) fails = 0;
-  const stored = setting('pwHash'), salt = setting('salt') || '';
-  const ok = stored ? (await sha256(salt + ':' + String(pw))) === stored : String(pw) === DEFAULT_PW;
-  if (!ok) { fails++; if (fails >= 5) lockUntil = Date.now() + 300000; throw new Error('PW'); }
-  fails = 0;
+/* 비밀번호는 PBKDF2(20만 번 반복)로 바꿔서 저장 — 시트를 봐도 원래 비밀번호를 알아내기 어려움 */
+const PBKDF2_N = 200000;
+async function pbkdf2(pw, salt) {
+  const k = await crypto.subtle.importKey('raw', new TextEncoder().encode(String(pw)), 'PBKDF2', false, ['deriveBits']);
+  const b = await crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt: new TextEncoder().encode(salt), iterations: PBKDF2_N }, k, 256);
+  return [...new Uint8Array(b)].map((x) => x.toString(16).padStart(2, '0')).join('');
 }
+const newSalt = () => { const a = new Uint8Array(16); crypto.getRandomValues(a); return [...a].map((x) => x.toString(16).padStart(2, '0')).join(''); };
+async function storePw(pw) {
+  const salt = newSalt();
+  await setSetting('salt', salt); await setSetting('pwAlgo', 'pbkdf2'); await setSetting('pwHash', await pbkdf2(pw, salt));
+}
+/* 틀린 횟수는 브라우저에 기억 → 새로고침해도 초기화되지 않음. 5번 틀리면 5분, 그 뒤로 틀릴 때마다 2배씩 기다림 */
+const LK = 'classapp_pwlock';
+const lockState = () => { try { return JSON.parse(localStorage.getItem(LK) || '{}'); } catch (e) { return {}; } };
+const setLockState = (o) => { try { localStorage.setItem(LK, JSON.stringify(o)); } catch (e) { /* 저장 안 됨 */ } };
+let checking = false, okCache = null;
+async function checkPw(pw) {
+  const ls = lockState();
+  if (ls.until && Date.now() < ls.until) { const e = new Error('LOCKED'); e.wait = Math.ceil((ls.until - Date.now()) / 60000); throw e; }
+  const stored = setting('pwHash'), salt = setting('salt') || '', algo = setting('pwAlgo');
+  if (okCache && okCache.pw === String(pw) && okCache.hash === stored) return;
+  let ok;
+  if (!stored) ok = String(pw) === DEFAULT_PW;
+  else if (algo === 'pbkdf2') ok = (await pbkdf2(pw, salt)) === stored;
+  else ok = (await sha256(salt + ':' + String(pw))) === stored;
+  if (!ok) {
+    const f = (ls.fails || 0) + 1, o = { fails: f };
+    if (f >= 5) o.until = Date.now() + 300000 * Math.pow(2, Math.min(5, f - 5));
+    setLockState(o);
+    const er = new Error(f >= 5 ? 'LOCKED' : 'PW'); if (o.until) er.wait = Math.ceil((o.until - Date.now()) / 60000); throw er;
+  }
+  if (ls.fails) setLockState({});
+  okCache = { pw: String(pw), hash: stored };
+  // 예전 방식으로 저장된 비밀번호는 맞게 입력했을 때 새 방식으로 바꿔 둠
+  if (stored && algo !== 'pbkdf2' && !checking) { checking = true; storePw(pw).catch(() => {}).finally(() => { checking = false; }); }
+}
+const weakPw = (p) => /^(.)\1+$/.test(p) || ['123456', '1234567', '12345678', '123456789', '654321', 'password', 'qwerty', '111111', '000000'].includes(String(p).toLowerCase()) || p === DEFAULT_PW;
 const isDefaultPw = () => !setting('pwHash');
 const isProt = (k) => !k || k.indexOf('grade:') === 0 || k.indexOf('survey:') === 0;
 
@@ -174,7 +207,7 @@ const kvRows = () => rows.data;
 async function importDemo(db) {
   await ensure();
   const o = { ok: true };
-  if (db.pw && db.pw !== DEFAULT_PW) { const salt = (crypto.randomUUID ? crypto.randomUUID() : String(Math.random())); await setSetting('salt', salt); await setSetting('pwHash', await sha256(salt + ':' + db.pw)); }
+  if (db.pw && db.pw !== DEFAULT_PW) await storePw(db.pw);
   await replaceAll('roster', (db.roster || []).map((r) => ROSTER_KEYS.map((k) => (r[k] == null ? '' : String(r[k]).slice(0, 500)))));
   if (db.seat) await setSetting('seat', JSON.stringify(db.seat));
   for (const b of db.boards || []) await upsert('boards', 0, [String(b.id), String(b.title || ''), b.locked ? 'Y' : 'N', JSON.stringify(b.done || []), String(b.created || Date.now()), JSON.stringify(b.green || []), JSON.stringify(b.doneAt || {})]);
@@ -277,7 +310,7 @@ async function handle(action, d) {
     case 'saveSeat': await checkPw(d.pw); await setSetting('seat', JSON.stringify(d.seat)); return { ok: true };
     case 'changePw': {
       await checkPw(d.pw); const np = String(d.newPw || ''); if (np.length < 6) throw new Error('SHORT');
-      const salt = crypto.randomUUID ? crypto.randomUUID() : String(Math.random()); await setSetting('salt', salt); await setSetting('pwHash', await sha256(salt + ':' + np)); return { ok: true };
+      if (weakPw(np)) throw new Error('WEAK'); await storePw(np); return { ok: true };
     }
     case 'saveBoard': {
       const b = d.board; if (!b || !b.id) throw new Error('BAD');
@@ -322,7 +355,7 @@ async function handle(action, d) {
 }
 
 APP.google = {
-  clientId, setClientId: (v) => localStorage.setItem(CID_KEY, String(v || '').trim()), login, hasToken, importDemo,
+  clientId, setClientId: (v) => localStorage.setItem(CID_KEY, String(v || '').trim()), login, logout, hasToken, importDemo,
   api: (action, data) => handle(action, data || {}),
   email: () => email
 };

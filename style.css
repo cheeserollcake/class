@@ -560,3 +560,11 @@ input.gcell.locked { background: #f3f4f6 !important; color: var(--sub); }
 .bi-img { position: relative; }
 .bi-img.has-link img { cursor: pointer; }
 .bi-link { position: absolute; right: 6px; bottom: 6px; background: rgba(255,255,255,.9); border: 1px solid var(--line); border-radius: 6px; font-size: 12px; padding: 1px 5px; pointer-events: none; }
+.bw-events { cursor: pointer; }
+.bw-events:hover { background: var(--bg); }
+.bw-edit { margin-left: auto; font-size: 11px; font-weight: 400; color: var(--sub); border: 1px solid var(--line); border-radius: 5px; padding: 1px 6px; }
+.bd-canvas { cursor: grab; }
+.bd-canvas.panning { cursor: grabbing; user-select: none; }
+.bd-canvas .bi { cursor: auto; }
+.icon-row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.icon-prev { width: 64px; height: 64px; border-radius: 14px; border: 1px solid var(--line); object-fit: cover; background: #fff; }

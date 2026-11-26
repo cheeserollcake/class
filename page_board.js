@@ -189,27 +189,36 @@ function place() {
     }
   }
   const auto = !pos;
-  if (auto) pos = autoLayout(W);
-  // 새로 생긴 상자는 맨 아래 빈자리에
+  if (auto) {   // 자동 정렬: 열 수를 늘려 가며 한 화면(세로)에 다 들어가게
+    z = 1; pos = autoLayout(W);
+    const hOf = (ps) => Math.max(0, ...Object.keys(ps).map((id) => { const e = B.inner.querySelector(`[data-id="${id}"]`); return ps[id].y + (e ? e.offsetHeight : 0); }));
+    for (let i = 0; i < 12 && H > 120 && hOf(pos) * z > H && z > 0.4; i++) { z = Math.max(0.4, z * 0.9); pos = autoLayout(W / z); }
+  }
+  // 새로 생긴 상자는 지금 보이는 화면의 왼쪽 위에
   const els = {}; B.inner.querySelectorAll('.bi').forEach((e) => { els[e.dataset.id] = e; });
-  let bottom = 0; const cur = {};
-  B.data.items.forEach((it) => { const p = pos[it.id], el = els[it.id]; if (p && el) { el.style.width = p.w + 'px'; bottom = Math.max(bottom, p.y + el.offsetHeight); } });
+  const cur = {}; let nNew = 0;
   B.data.items.forEach((it) => {
     const el = els[it.id]; if (!el) return;
     let p = pos[it.id];
-    if (!p) { const w = Math.min(240, W / z); p = { x: 0, y: bottom + 10, w }; el.style.width = w + 'px'; bottom = p.y + el.offsetHeight; }
+    if (!p) { const w = Math.min(240, W / z); p = { x: B.canvas.scrollLeft / z + 10 + nNew * 20, y: B.canvas.scrollTop / z + 10 + nNew * 20, w }; nNew++; }
     el.style.width = p.w + 'px'; el.style.left = p.x + 'px'; el.style.top = p.y + 'px';
     el.style.height = p.h && it.type !== 'image' ? p.h + 'px' : '';
     if (it.type === 'widget') fitSub(el, !!p.h);
     cur[it.id] = { x: p.x, y: p.y, w: p.w, ...(p.h ? { h: p.h } : {}) };
   });
-  if (!auto) {   // 세로로 넘치면 더 줄여서 한 화면에
-    const maxB = Math.max(1, ...Object.keys(cur).map((id) => cur[id].y + els[id].offsetHeight));
-    if (maxB * z > H && H > 120) z = Math.max(0.35, H / maxB);
-    z = Math.max(0.35, Math.min(z, 1.6));
-  }
+  z = Math.max(0.35, Math.min(z, 1.6));
   B.inner.style.zoom = z;
   B.cur = cur; B.z = z; B.auto = auto;
+  sizeInner();
+}
+/* 보드는 끝없이 넓음: 화면 밖으로 치운 상자까지 스크롤(또는 바탕을 끌어서)로 볼 수 있게 크기 맞추기 */
+function sizeInner(extraX, extraY) {
+  const z = B.z || 1; let r = 0, b = 0;
+  B.inner.querySelectorAll('.bi').forEach((e) => { r = Math.max(r, e.offsetLeft + e.offsetWidth); b = Math.max(b, e.offsetTop + e.offsetHeight); });
+  const cw = B.canvas.clientWidth / z, ch = B.canvas.clientHeight / z;
+  const fit = (v, c, ex) => Math.floor((v <= c + 2 ? c - 1 : v + 20) + (ex || 0));
+  B.inner.style.width = fit(r, cw, extraX) + 'px';
+  B.inner.style.height = fit(b, ch, extraY) + 'px';
 }
 /* 이 화면 크기의 배치로 지금 모습을 저장 (끌기·크기 바꾸기 시작할 때) */
 function pin() {
@@ -222,14 +231,17 @@ function pin() {
 function widgetBody(it, ctx) {
   if (it.id === 'w-events') {
     const list = upcoming();
-    return h('div', { class: 'bw-events' }, h('div', { class: 'bw-title' }, '다가오는 일정'),
+    const go = (e) => { e.stopPropagation(); settings('events'); };
+    return h('div', { class: 'bw-events', title: '눌러서 일정 고치기', onclick: go }, h('div', { class: 'bw-title' }, '다가오는 일정', h('span', { class: 'bw-edit' }, '✎ 일정')),
       list.length ? list.map((e) => h('div', { class: 'bw-ev' + (e.notice ? ' notice' : '') },
         h('div', { class: 'bw-ev-date' }, (e.notice ? '📌 ' : '') + mdw(e.date) + (e.periods.length ? ` · ${e.periods.join(',')}교시` : '')),
         h('div', { class: 'bw-ev-text' }, e.text))) : h('div', { class: 'muted' }, '1주일 안에 일정이 없어요.'));
   }
   const b = APP.S.boards.find((x) => 'w-sub-' + x.id === it.id);
   if (!b) return h('div', { class: 'muted' }, '제출확인판이 없어요.');
-  const roster = ctx.roster(), boardLocked = B.data.locked;
+  const roster = ctx.roster();
+  B.wOpen = B.wOpen || new Set();
+  const wl = b.locked || !B.wOpen.has(b.id);   // 보드에서는 열 때마다 잠긴 채로 시작
   const done = new Set(b.done || []), green = new Set(b.green || []);
   const count = h('span', { class: 'bw-count' });
   const upCount = () => { count.textContent = ` ${done.size + green.size}/${roster.length}`; };
@@ -241,7 +253,7 @@ function widgetBody(it, ctx) {
     let t = null;
     c.addEventListener('click', (e) => {
       e.stopPropagation();
-      if (b.locked || boardLocked) return;
+      if (b.locked || !B.wOpen.has(b.id)) return toast('잠금을 풀어야 누를 수 있어요');
       b.doneAt = b.doneAt || {};
       if (t) { clearTimeout(t); t = null; done.delete(st.num); delete b.doneAt[st.num]; green.add(st.num); paint(c, st.num); commit(); return; }   // 두 번 → 연두색
       t = setTimeout(() => {
@@ -254,8 +266,12 @@ function widgetBody(it, ctx) {
     return c;
   });
   upCount();
-  const lockBtn = boardLocked ? null : h('button', { class: 'bw-lock' + (b.locked ? ' on' : ''), title: b.locked ? '잠금 풀기' : '잠그기 (누르지 못하게)', onclick: (e) => { e.stopPropagation(); b.locked = !b.locked; APP.queueBoardSave(b); refresh(); } }, b.locked ? '🔒 잠김' : '잠금');
-  return h('div', { class: 'bw-sub' + (b.locked ? ' locked' : '') }, h('div', { class: 'bw-title' }, h('span', null, b.title || '제목 없는 제출판'), count, h('span', { style: 'flex:1' }), lockBtn),
+  const lockBtn = h('button', { class: 'bw-lock' + (wl ? ' on' : ''), title: wl ? '잠금 풀기' : '잠그기 (누르지 못하게)', onclick: (e) => {
+    e.stopPropagation();
+    if (wl) { B.wOpen.add(b.id); if (b.locked) { b.locked = false; APP.queueBoardSave(b); } } else B.wOpen.delete(b.id);
+    refresh();
+  } }, wl ? '잠김' : '잠금');
+  return h('div', { class: 'bw-sub' + (wl ? ' locked' : '') }, h('div', { class: 'bw-title' }, h('span', null, b.title || '제목 없는 제출판'), count, h('span', { style: 'flex:1' }), lockBtn),
     h('div', { class: 'bw-cells' }, cells));
 }
 /* 제출판 이름 카드: 모두 같은 크기로, 상자 크기에 맞게 */
@@ -336,7 +352,7 @@ function editLink(it) {
 function resize(it, el, k) {
   const L = pin(), z = L._z || 1, Wu = B.canvas.clientWidth / z, p = L[it.id] || { x: 0, y: 0, w: el.offsetWidth };
   const w = Math.max(60, Math.min(Wu, p.w * k));
-  it.w = w; L[it.id] = { x: Math.min(p.x, Wu - w), y: p.y, w };
+  it.w = w; L[it.id] = { ...p, w };
   save(); place();
 }
 function removeItem(it) {
@@ -354,7 +370,7 @@ function resizeDrag(ev, el, it) {
   ev.target.setPointerCapture(ev.pointerId); el.classList.add('dragging');
   let p = { ...p0 };
   const mv = (e) => {
-    const w = Math.max(60, Math.min(Wu - p0.x, p0.w + (e.clientX - sx) / z));
+    const w = Math.max(60, Math.min(Math.max(Wu, 3000), p0.w + (e.clientX - sx) / z));
     p = { ...p0, w };
     if (it.type !== 'image') { p.h = Math.max(40, h0 + (e.clientY - sy) / z); el.style.height = p.h + 'px'; }
     el.style.width = w + 'px';
@@ -405,6 +421,7 @@ function pasteClip() {
   if (c.cut) B.clip = null; else c.pos = c.pos ? { ...c.pos, x: c.pos.x + d, y: c.pos.y + d } : null;
   B.sel = it.id; save(); render(); return true;
 }
+let pasteT = null;
 const boardActive = () => B.panel && B.panel.isConnected && B.data && !B.data.locked && !document.querySelector('.overlay');
 const editing = () => { const a = document.activeElement; return a && (a.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)); };
 document.addEventListener('keydown', (e) => {
@@ -413,27 +430,41 @@ document.addEventListener('keydown', (e) => {
   if (mod && k === 'z') { e.preventDefault(); undo(); }
   else if (mod && k === 'c' && B.sel) { e.preventDefault(); copySel(false); }
   else if (mod && k === 'x' && B.sel) { e.preventDefault(); copySel(true); }
+  else if (mod && k === 'v' && B.clip) {
+    // 붙여넣기 이벤트가 안 오는 브라우저도 있어서, 잠깐 기다렸다가 직접 붙여넣기 (이미지를 복사해 둔 경우는 이미지 우선)
+    clearTimeout(pasteT); pasteT = setTimeout(() => { pasteT = null; pasteClip(); }, 120);
+  }
   else if ((k === 'delete' || k === 'backspace') && B.sel) { const it = B.data.items.find((x) => x.id === B.sel); if (it && it.type !== 'widget') { e.preventDefault(); removeItem(it); } }
 });
 document.addEventListener('paste', (e) => {
   if (!boardActive() || editing()) return;
   const f = [...((e.clipboardData || {}).items || [])].find((x) => x.kind === 'file' && /^image\//.test(x.type));
-  if (f) { e.preventDefault(); addImage(f.getAsFile()); return; }
-  if (B.clip) { e.preventDefault(); pasteClip(); }
+  if (f) { e.preventDefault(); clearTimeout(pasteT); pasteT = null; addImage(f.getAsFile()); return; }
+  if (B.clip) { e.preventDefault(); if (pasteT) { clearTimeout(pasteT); pasteT = null; } pasteClip(); }
 });
 function drag(ev, el, it) {
   ev.preventDefault(); pushUndo();
-  const L = pin(), z = L._z || 1, Wu = B.canvas.clientWidth / z;   // 이때부터 이 화면 크기는 자유 배치
+  const L = pin(), z = L._z || 1;   // 이때부터 이 화면 크기는 자유 배치
   const p0 = L[it.id] || { x: el.offsetLeft, y: el.offsetTop, w: el.offsetWidth }, sx = ev.clientX, sy = ev.clientY;
   el.classList.add('dragging'); el.setPointerCapture(ev.pointerId);
   let p = { ...p0 };
+  const C = B.canvas, sl0 = C.scrollLeft, st0 = C.scrollTop;
+  let lastE = ev, timer = null, vx = 0, vy = 0;
   const mv = (e) => {
-    p = { x: Math.max(0, Math.min(Wu - p0.w, p0.x + (e.clientX - sx) / z)), y: Math.max(0, p0.y + (e.clientY - sy) / z), w: p0.w };
+    if (e) lastE = e;
+    const dx = (lastE.clientX - sx + C.scrollLeft - sl0) / z, dy = (lastE.clientY - sy + C.scrollTop - st0) / z;
+    p = { ...p0, x: Math.max(0, p0.x + dx), y: Math.max(0, p0.y + dy) };
     el.style.left = p.x + 'px'; el.style.top = p.y + 'px';
+    // 화면 가장자리로 끌면 보드가 따라 움직임 (보드는 끝없이 넓음)
+    const r = C.getBoundingClientRect(), edge = 30;
+    vx = lastE.clientX > r.right - edge ? 14 : lastE.clientX < r.left + edge ? -14 : 0; vy = lastE.clientY > r.bottom - edge ? 14 : lastE.clientY < r.top + edge ? -14 : 0;
+    if ((vx || vy) && !timer) timer = setInterval(() => { sizeInner(vx > 0 ? 400 : 0, vy > 0 ? 400 : 0); C.scrollLeft += vx; C.scrollTop += vy; mv(); }, 30);
+    else if (!vx && !vy && timer) { clearInterval(timer); timer = null; }
   };
   const up = () => {
+    if (timer) clearInterval(timer);
     el.removeEventListener('pointermove', mv); el.removeEventListener('pointerup', up); el.classList.remove('dragging');
-    L[it.id] = p; save();
+    L[it.id] = p; save(); sizeInner();
   };
   el.addEventListener('pointermove', mv); el.addEventListener('pointerup', up);
 }
@@ -504,12 +535,12 @@ async function addImage(file) {
 }
 
 /* ---------- 설정 ---------- */
-function settings() {
+function settings(startTab) {
   const d = B.data, c = JSON.parse(JSON.stringify(d.cfg)), evs = d.events.map((e) => ({ ...e }));
   const curB = B.index.boards.find((b) => b.id === B.index.cur);
   const nameIn = h('input', { value: curB ? curB.name : '', style: 'flex:1;margin:0;width:auto', maxlength: 20 });
   const box = h('div');
-  let tab = 'basic';
+  let tab = startTab === 'events' ? 'events' : 'basic';
   const draw = () => {
     const boards = APP.S.boards;
     const dateIn = h('input', { type: 'date', value: ymd(new Date()) }), textIn = h('input', { placeholder: '일정 내용 (예: 현장체험학습)', style: 'flex:1;min-width:160px' });
@@ -576,13 +607,22 @@ function drawHead() {
     h('button', { class: 'sm' + (d.locked ? ' primary' : ''), title: '잠그면 학생이 보드를 고칠 수 없어요', onclick: () => { d.locked = !d.locked; save(); render(); } }, d.locked ? '🔒 잠김' : '잠금'));
 }
 function mount(ctx) {
-  CTX = ctx;
+  CTX = ctx; B.wOpen = new Set();
   headEl = h('div', { class: 'bd-head' });
   toolsEl = h('div', { class: 'bt-tools', hidden: true });
   B.inner = h('div', { class: 'bd-inner' });
   B.canvas = h('div', { class: 'bd-canvas' }, B.inner);
   B.panel = h('div', { class: 'bd-panel' }, headEl, toolsEl, B.canvas);
-  B.canvas.addEventListener('pointerdown', (e) => { if (e.target === B.canvas || e.target === B.inner) select(null); });
+  B.canvas.addEventListener('pointerdown', (e) => {
+    if (e.target !== B.canvas && e.target !== B.inner) return;
+    select(null);
+    if (e.pointerType !== 'mouse' || e.button !== 0) return;   // 손가락은 원래대로 밀어서 이동
+    const C = B.canvas, sx = e.clientX, sy = e.clientY, l0 = C.scrollLeft, t0 = C.scrollTop;
+    C.classList.add('panning');
+    const mv = (m) => { C.scrollLeft = l0 - (m.clientX - sx); C.scrollTop = t0 - (m.clientY - sy); };
+    const up = () => { C.classList.remove('panning'); window.removeEventListener('pointermove', mv); window.removeEventListener('pointerup', up); };
+    window.addEventListener('pointermove', mv); window.addEventListener('pointerup', up);
+  });
   B.panel.tabIndex = -1;
   headEl.append(h('span', { class: 'muted' }, '불러오는 중…'));
   load().then(render);
@@ -607,6 +647,7 @@ APP.pages.board = () => {
   return wrap;
 };
 let fitPanel = null;
+window.addEventListener('pagehide', () => { flush(); });
 window.addEventListener('resize', () => { if (fitPanel) fitPanel(); });
 document.addEventListener('fullscreenchange', () => setTimeout(() => { if (fitPanel) fitPanel(); }, 60));
 })();
