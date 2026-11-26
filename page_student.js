@@ -136,6 +136,23 @@ function annotate() {
 }
 const sortedLogs = (dir) => ST.logs.slice().sort((a, b) => (a.date === b.date ? a.created - b.created : a.date < b.date ? -1 : 1) * (dir === 'asc' ? 1 : -1));
 
+/* ---------- 평어 생성용: 학생별 관계·사건 요약 (다른 학생 이름은 담지 않음) ---------- */
+APP.studentInsights = async () => {
+  await ensure(); annotate();
+  const keep = { src: ST.src, round: ST.round, thr: ST.thr };
+  ST.src = { log: true, survey: true }; ST.round = 'all'; ST.thr = 1;
+  let R; try { R = computeRel(); } finally { Object.assign(ST, keep); }
+  const out = {};
+  R.ids.forEach((n) => {
+    const rec = R.ids.filter((x) => x !== n && R.sDir.has(x + '>' + n)).map((x) => R.sDir.get(x + '>' + n));
+    const mutual = R.ids.filter((x) => x !== n && (R.sDir.get(n + '>' + x) ?? -9) >= 1.5 && (R.sDir.get(x + '>' + n) ?? -9) >= 1.5).length;
+    const close = R.edges.filter((e) => (e.a === n || e.b === n) && e.r >= 1).length, conflict = R.edges.filter((e) => (e.a === n || e.b === n) && e.r <= -1).length;
+    const logs = ST.logs.filter((l) => (l._nums || []).includes(n)).map((l) => ({ text: l.content, tone: l._tone }));
+    out[n] = { received: rec.length ? rec.reduce((a, b) => a + b, 0) / rec.length : null, raters: rec.length, good: rec.filter((v) => v >= 1.5).length, bad: rec.filter((v) => v <= -1).length, mutual, close, conflict, pos: R.pos[n] || 0, neg: R.neg[n] || 0, logs };
+  });
+  return out;
+};
+
 /* ---------- 페이지 ---------- */
 APP.pages.student = () => {
   const wrap = h('div');

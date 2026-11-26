@@ -376,3 +376,31 @@ button.big { padding: 12px 28px; font-size: 17px; }
 .clear-row { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; margin-bottom: 6px; cursor: pointer; }
 .clear-row.on { border-color: var(--danger); background: #fff5f5; }
 .clear-row.all { border-style: dashed; }
+
+/* 평어 관리 / 생성 */
+.cm-table td { vertical-align: top; padding: 6px; }
+.cm-table select { max-width: 160px; }
+.cm-tcell { width: 100%; min-width: 260px; }
+.cm-text { width: 100%; min-height: 38px; resize: none; overflow: hidden; font: inherit; line-height: 1.5; padding: 7px 9px; border: 1px solid var(--line); border-radius: 6px; box-sizing: border-box; }
+.cm-text:focus { outline: none; border-color: var(--primary); }
+.cm-x { color: var(--sub); }
+.cm-status { font-size: 12px; }
+.cm-subj { display: inline-flex; align-items: center; gap: 2px; }
+.cm-subj .x { border: 0; background: none; cursor: pointer; color: var(--sub); font-size: 12px; padding: 0 3px; }
+select.cm-pol.neg { color: var(--danger); font-weight: 700; }
+.cm-gentable td { vertical-align: top; padding: 8px; }
+.cm-act { white-space: nowrap; width: 70px; }
+.cm-act button { padding: 2px 7px; }
+.cm-name { white-space: nowrap; font-weight: 600; }
+.cm-extra { white-space: nowrap; }
+.cm-gen { text-align: left; line-height: 1.7; min-width: 320px; }
+.cm-gen b { background: #fff3bf; }
+.cm-neg { color: #b42318; }
+.cm-len { white-space: nowrap; color: var(--sub); font-size: 12px; }
+.cm-date { display: inline-block; margin: 0 4px 2px 0; padding: 1px 6px; border-radius: 6px; background: var(--bg); font-size: 12px; }
+.cm-date.hit { background: #fff3bf; font-weight: 700; }
+.cm-unsaved { color: #b45309; font-size: 13px; }
+.cm-modal { width: min(760px, 94vw); max-height: 86vh; overflow: auto; }
+.cm-edit-row { border: 1px solid var(--line); border-radius: 8px; padding: 8px; margin-bottom: 8px; }
+.cm-edit-row .cm-text { margin-top: 6px; }
+.cm-edit-row select { max-width: 360px; }

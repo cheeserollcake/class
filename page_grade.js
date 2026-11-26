@@ -63,9 +63,10 @@ async function exportSheet(name, rows) {
 }
 
 /* ---------- 페이지 ---------- */
+APP.gradeCore = { GR, ensure, loadKeys, perfKey, bandIdx, semToggle: (r) => semToggle(r), num, fmt, saveCfg: () => saveCfg(), exportSheet: (n, r) => exportSheet(n, r) };
 APP.pages.grade = () => {
   const wrap = h('div'), body = h('div'), tabs = h('div', { class: 'tabs' });
-  const drawTabs = () => tabs.replaceChildren(...[['perf', '수행평가 관리'], ['etc', '기타 평가 관리'], ['trend', '성적 추이'], ['view', '성적 조회']].map(([id, n]) =>
+  const drawTabs = () => tabs.replaceChildren(...[['perf', '수행평가 관리'], ['etc', '기타 평가 관리'], ['trend', '성적 추이'], ['view', '성적 조회'], ['cmt', '평어 관리'], ['gen', '평어 생성']].map(([id, n]) =>
     h('button', { class: 'tab' + (GR.tab === id ? ' active' : ''), onclick: () => { GR.tab = id; drawTabs(); draw(); } }, n)), h('div', { style: 'flex:1' }), h('button', { class: 'sm', onclick: exportGrades }, '내보내기'));
   const draw = async () => {
     body.replaceChildren(APP.loading());
@@ -75,6 +76,8 @@ APP.pages.grade = () => {
       let v;
       if (GR.tab === 'perf') v = await viewPerf(draw);
       else if (GR.tab === 'etc') v = await viewEtc(draw);
+      else if (GR.tab === 'cmt') v = await APP.comment.manage(draw);
+      else if (GR.tab === 'gen') v = await APP.comment.generate(draw);
       else { await loadAll(); v = GR.tab === 'trend' ? viewTrend(draw) : viewLookup(draw); }
       body.replaceChildren(v);
     } catch (e) { body.replaceChildren(h('div', { class: 'banner warn' }, errMsg(e))); }
