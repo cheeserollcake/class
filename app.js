@@ -221,11 +221,14 @@ async function startApp() {
 function renderShell() {
   const root = $('#app'); root.replaceChildren();
   let closed = false; try { closed = localStorage.getItem('side_closed') === '1'; } catch (e) { /* 저장 안 됨 */ }
-  const tog = h('button', { class: 'side-toggle', title: closed ? '메뉴 펼치기' : '메뉴 접기', onclick: () => {
-    const c = !nav.classList.contains('closed'); nav.classList.toggle('closed', c); tog.textContent = c ? '»' : '«'; tog.title = c ? '메뉴 펼치기' : '메뉴 접기';
+  const setClosed = (c) => {
+    nav.classList.toggle('closed', c); fab.classList.toggle('show', c);
     try { localStorage.setItem('side_closed', c ? '1' : '0'); } catch (e) { /* 저장 안 됨 */ }
     window.dispatchEvent(new Event('resize'));
-  } }, closed ? '»' : '«');
+  };
+  const tog = h('button', { class: 'side-toggle', title: '메뉴 숨기기', onclick: () => setClosed(true) }, '«');
+  const togM = h('button', { class: 'side-toggle-m', title: '메뉴 숨기기', onclick: () => setClosed(true) }, '▲ 숨기기');
+  const fab = h('button', { class: 'menu-fab' + (closed ? ' show' : ''), title: '메뉴 보이기', onclick: () => setClosed(false) }, '☰');
   const nav = h('nav', { class: 'side' + (closed ? ' closed' : '') },
     h('div', { class: 'brand' }, h('span', null, '학급관리'), tog),
     TABS.map((t) => h('button', { class: 'nav-btn' + (S.tab === t.id ? ' active' : ''), onclick: () => go(t.id) },
@@ -233,8 +236,8 @@ function renderShell() {
     h('div', { class: 'spacer' }),
     S.unlocked ? h('button', { class: 'ghost sm', onclick: () => { lock(); toast('잠갔습니다'); } }, '지금 잠그기') : null,
     h('div', { class: 'who' }, DEMO ? '데모 모드' : S.email),
-    DEMO ? null : h('button', { class: 'ghost sm', onclick: logout }, '로그아웃'));
-  root.append(h('div', { class: 'shell' }, nav, h('main', { class: 'main', id: 'main' })));
+    DEMO ? null : h('button', { class: 'ghost sm', onclick: logout }, '로그아웃'), togM);
+  root.append(h('div', { class: 'shell' }, nav, h('main', { class: 'main', id: 'main' })), fab);
   renderPage();
 }
 function go(id) {
@@ -926,7 +929,7 @@ async function kvGet(keys) {
 }
 const APP = window.APP = {
   S, h, $, api, toast, errMsg, clone, byNum, ERR, gcls, DEMO,
-  pages: {}, onLock: [], onClear: [], clearPlan, subDisplayName: (st) => subDisplayName(st), byNum,
+  pages: {}, onLock: [], onClear: [], clearPlan, subDisplayName: (st) => subDisplayName(st), byNum, queueBoardSave: (b) => queueBoardSave(b),
   renderPage: () => renderPage(),
   kvGet, kvSet: (key, obj) => api('kvSet', { key, value: JSON.stringify(obj) }),
   kvList: async (prefix) => (await api('kvList', { prefix })).keys,

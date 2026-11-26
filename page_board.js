@@ -81,10 +81,11 @@ function cleanHtml(html) {
     if (c.nodeType === 3) return;
     if (c.nodeType !== 1) { c.remove(); return; }
     const tag = c.tagName.toLowerCase();
-    if (!['b', 'strong', 'span', 'br', 'div', 'font', 'p'].includes(tag)) { c.replaceWith(...c.childNodes); walk(n); return; }
-    const st = c.getAttribute('style') || '', color = c.getAttribute('color');
+    if (!['b', 'strong', 'span', 'br', 'div', 'font', 'p', 'u', 'i', 'em', 'a'].includes(tag)) { c.replaceWith(...c.childNodes); walk(n); return; }
+    const st = c.getAttribute('style') || '', color = c.getAttribute('color'), href = c.getAttribute('href') || '';
     [...c.attributes].forEach((a) => c.removeAttribute(a.name));
-    const keep = st.split(';').map((x) => x.trim()).filter((x) => /^(color|font-size|font-weight)\s*:\s*[#\w(),.\s%-]+$/i.test(x)).join(';');
+    if (tag === 'a') { if (!safeUrl(href)) { c.replaceWith(...c.childNodes); walk(n); return; } c.setAttribute('href', href); c.setAttribute('target', '_blank'); c.setAttribute('rel', 'noopener'); }
+    const keep = st.split(';').map((x) => x.trim()).filter((x) => /^(color|font-size|font-weight|font-style|text-decoration|text-decoration-line)\s*:\s*[#\w(),.\s%-]+$/i.test(x)).join(';');
     if (keep) c.setAttribute('style', keep);
     if (tag === 'font' && color) c.setAttribute('style', (keep ? keep + ';' : '') + 'color:' + color.replace(/[^#\w]/g, ''));
     walk(c);
@@ -92,6 +93,58 @@ function cleanHtml(html) {
   walk(t.content);
   return t.innerHTML.slice(0, 6000);
 }
+
+/* ---------- 링크 ---------- */
+const URL_RE = /https?:\/\/[^\s<>"']+/g;
+const safeUrl = (u) => /^https?:\/\/[^\s<>"']+$/i.test(String(u || '').trim());
+const trimUrl = (u) => u.replace(/[.,!?)\]}'"’”。、]+$/, '');
+function openLink(u) { if (safeUrl(u)) window.open(u, '_blank', 'noopener'); }
+/* 글상자 안의 https:// 로 시작하는 글을 링크로 바꾸기 (이미 있는 링크는 글과 주소를 맞춤) */
+function linkify(root) {
+  root.querySelectorAll('a').forEach((a) => {
+    const t = (a.textContent || '').trim();
+    if (safeUrl(t) && trimUrl(t) === t) { a.setAttribute('href', t); a.setAttribute('target', '_blank'); a.setAttribute('rel', 'noopener'); } else a.replaceWith(...a.childNodes);
+  });
+  root.normalize();
+  const tw = document.createTreeWalker(root, NodeFilter.SHOW_TEXT), nodes = [];
+  while (tw.nextNode()) if (!tw.currentNode.parentElement.closest('a')) nodes.push(tw.currentNode);
+  nodes.forEach((tn) => {
+    const v = tn.nodeValue; URL_RE.lastIndex = 0; if (!URL_RE.test(v)) return;
+    const frag = document.createDocumentFragment(); let last = 0; URL_RE.lastIndex = 0; let m;
+    while ((m = URL_RE.exec(v))) {
+      const u = trimUrl(m[0]); if (!u.replace(/^https?:\/\//, '')) continue;
+      frag.append(v.slice(last, m.index));
+      const a = document.createElement('a'); a.href = u; a.target = '_blank'; a.rel = 'noopener'; a.textContent = u; frag.append(a);
+      last = m.index + u.length;
+    }
+    frag.append(v.slice(last)); tn.replaceWith(frag);
+  });
+  return root;
+}
+const linkHtml = (html) => { const t = document.createElement('div'); t.innerHTML = cleanHtml(html); linkify(t); return t.innerHTML; };
+
+/* ---------- QR 코드 읽기 (브라우저 기능 → 없으면 jsQR) ---------- */
+let jsqrP = null;
+function loadJsQR() {
+  if (window.jsQR) return Promise.resolve(window.jsQR);
+  if (!jsqrP) jsqrP = new Promise((res, rej) => { const sc = document.createElement('script'); sc.src = 'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js'; sc.onload = () => (window.jsQR ? res(window.jsQR) : rej(new Error('jsQR'))); sc.onerror = () => { jsqrP = null; rej(new Error('jsQR')); }; document.head.append(sc); });
+  return jsqrP;
+}
+async function readQR(cv) {
+  try {
+    if ('BarcodeDetector' in window) {
+      const f = await window.BarcodeDetector.getSupportedFormats();
+      if (f.includes('qr_code')) { const r = await new window.BarcodeDetector({ formats: ['qr_code'] }).detect(cv); if (r[0] && r[0].rawValue) return r[0].rawValue.trim(); }
+    }
+  } catch (e) { /* 다음 방법 */ }
+  try {
+    const jsQR = await loadJsQR(), d = cv.getContext('2d').getImageData(0, 0, cv.width, cv.height);
+    const r = jsQR(d.data, cv.width, cv.height); if (r && r.data) return String(r.data).trim();
+  } catch (e) { /* 못 읽음 */ }
+  return '';
+}
+
+const boxStyle = (st) => `color:${st.color || '#1f2937'};font-size:${st.size || 20}px;font-weight:${st.bold ? 700 : 400};font-style:${st.italic ? 'italic' : 'normal'};text-decoration:${st.underline ? 'underline' : 'none'}`;
 
 /* ---------- 위젯 목록 맞추기 (설정에 따라 제출확인판·일정 상자 추가/제거) ---------- */
 function syncWidgets() {
@@ -109,7 +162,8 @@ function autoLayout(W) {
   B.data.items.forEach((it) => {
     const el = B.inner.querySelector(`[data-id="${it.id}"]`); if (!el) return;
     const w = it.type === 'image' ? Math.min(cw, it.w || cw) : cw;
-    el.style.width = w + 'px';
+    el.style.width = w + 'px'; el.style.height = '';
+    if (it.type === 'widget') fitSub(el, false);
     const c = colY.indexOf(Math.min(...colY));
     pos[it.id] = { x: c * (cw + gap) + (cw - w) / 2, y: colY[c], w };
     colY[c] += el.offsetHeight + gap;
@@ -145,7 +199,9 @@ function place() {
     let p = pos[it.id];
     if (!p) { const w = Math.min(240, W / z); p = { x: 0, y: bottom + 10, w }; el.style.width = w + 'px'; bottom = p.y + el.offsetHeight; }
     el.style.width = p.w + 'px'; el.style.left = p.x + 'px'; el.style.top = p.y + 'px';
-    cur[it.id] = { x: p.x, y: p.y, w: p.w };
+    el.style.height = p.h && it.type !== 'image' ? p.h + 'px' : '';
+    if (it.type === 'widget') fitSub(el, !!p.h);
+    cur[it.id] = { x: p.x, y: p.y, w: p.w, ...(p.h ? { h: p.h } : {}) };
   });
   if (!auto) {   // 세로로 넘치면 더 줄여서 한 화면에
     const maxB = Math.max(1, ...Object.keys(cur).map((id) => cur[id].y + els[id].offsetHeight));
@@ -173,9 +229,47 @@ function widgetBody(it, ctx) {
   }
   const b = APP.S.boards.find((x) => 'w-sub-' + x.id === it.id);
   if (!b) return h('div', { class: 'muted' }, '제출확인판이 없어요.');
-  const done = new Set(b.done || []), green = new Set(b.green || []), roster = ctx.roster();
-  return h('div', { class: 'bw-sub' }, h('div', { class: 'bw-title' }, b.title || '제목 없는 제출판', h('span', { class: 'bw-count' }, ` ${done.size + green.size}/${roster.length}`)),
-    h('div', { class: 'bw-cells' }, roster.map((st) => h('span', { class: 'bw-cell' + (done.has(st.num) ? ' done' : green.has(st.num) ? ' green' : '') }, ctx.name(st)))));
+  const roster = ctx.roster(), boardLocked = B.data.locked;
+  const done = new Set(b.done || []), green = new Set(b.green || []);
+  const count = h('span', { class: 'bw-count' });
+  const upCount = () => { count.textContent = ` ${done.size + green.size}/${roster.length}`; };
+  const commit = () => { b.done = [...done].sort((x, y) => x - y); b.green = [...green].sort((x, y) => x - y); upCount(); APP.queueBoardSave(b); };
+  const paint = (c, n) => { c.classList.toggle('done', done.has(n)); c.classList.toggle('green', green.has(n)); };
+  const cells = roster.map((st) => {
+    const c = h('span', { class: 'bw-cell' }, h('span', null, ctx.name(st)));
+    paint(c, st.num);
+    let t = null;
+    c.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (b.locked || boardLocked) return;
+      b.doneAt = b.doneAt || {};
+      if (t) { clearTimeout(t); t = null; done.delete(st.num); delete b.doneAt[st.num]; green.add(st.num); paint(c, st.num); commit(); return; }   // 두 번 → 연두색
+      t = setTimeout(() => {
+        t = null;
+        if (green.has(st.num)) { green.delete(st.num); done.add(st.num); b.doneAt[st.num] = Date.now(); }
+        else if (done.has(st.num)) { done.delete(st.num); delete b.doneAt[st.num]; } else { done.add(st.num); b.doneAt[st.num] = Date.now(); }
+        paint(c, st.num); commit();
+      }, 260);
+    });
+    return c;
+  });
+  upCount();
+  const lockBtn = boardLocked ? null : h('button', { class: 'bw-lock' + (b.locked ? ' on' : ''), title: b.locked ? '잠금 풀기' : '잠그기 (누르지 못하게)', onclick: (e) => { e.stopPropagation(); b.locked = !b.locked; APP.queueBoardSave(b); refresh(); } }, b.locked ? '🔒 잠김' : '잠금');
+  return h('div', { class: 'bw-sub' + (b.locked ? ' locked' : '') }, h('div', { class: 'bw-title' }, h('span', null, b.title || '제목 없는 제출판'), count, h('span', { style: 'flex:1' }), lockBtn),
+    h('div', { class: 'bw-cells' }, cells));
+}
+/* 제출판 이름 카드: 모두 같은 크기로, 상자 크기에 맞게 */
+function fitSub(el, hasH) {
+  const grid = el.querySelector('.bw-cells'); if (!grid) return;
+  const n = grid.children.length; if (!n) return;
+  const L = Math.max(2, ...[...grid.children].map((c) => [...c.textContent].length)), W = grid.clientWidth, gap = 4;
+  let best = null;
+  if (hasH) {
+    const H = el.clientHeight - grid.offsetTop - 12;
+    for (let c = 1; c <= n; c++) { const r = Math.ceil(n / c), cw = (W - gap * (c - 1)) / c, ch = (H - gap * (r - 1)) / r; if (cw <= 0 || ch <= 0) continue; const f = Math.min(ch * 0.5, cw / (L + 0.8), 60); if (!best || f > best.f) best = { c, ch, f }; }
+  }
+  if (!best) { const f = 13, cw = f * (L + 0.8) + 4, c = Math.max(1, Math.floor((W + gap) / (cw + gap))); best = { c, ch: 28, f }; }
+  grid.style.gridTemplateColumns = `repeat(${best.c}, 1fr)`; grid.style.gridAutoRows = Math.max(18, Math.floor(best.ch)) + 'px'; grid.style.fontSize = Math.max(10, Math.floor(best.f)) + 'px';
 }
 function itemEl(it, ctx) {
   const locked = B.data.locked;
@@ -183,29 +277,61 @@ function itemEl(it, ctx) {
   let body;
   if (it.type === 'text') {
     const st = it.style || {};
-    body = h('div', { class: 'bt-text', contenteditable: locked ? 'false' : 'true', style: `color:${st.color || '#1f2937'};font-size:${st.size || 20}px;font-weight:${st.bold ? 700 : 400}`, 'data-ph': '글을 쓰세요' });
-    body.innerHTML = cleanHtml(it.html || '');
+    body = h('div', { class: 'bt-text', contenteditable: locked ? 'false' : 'true', style: boxStyle(st), 'data-ph': '글을 쓰세요' });
+    body.innerHTML = linkHtml(it.html || '');
     body.addEventListener('input', () => { it.html = cleanHtml(body.innerHTML); save(); });
+    // 링크 누르기: 글을 고치는 중이 아니면 새 창으로 열기
+    body.addEventListener('pointerdown', (e) => {
+      const a = e.target.closest('a'); if (!a || document.activeElement === body) return;
+      e.preventDefault(); e.stopPropagation(); select(it.id); openLink(a.getAttribute('href'));
+    });
+    body.addEventListener('click', (e) => { if (e.target.closest('a') && document.activeElement !== body) e.preventDefault(); });
     body.addEventListener('focus', () => { B.focus = { it, body }; drawTools(); });
-    body.addEventListener('blur', () => { setTimeout(() => { if (B.focus && B.focus.body === body && !document.activeElement.closest('.bt-tools')) { B.focus = null; drawTools(); } place(); }, 150); });
+    body.addEventListener('blur', () => {
+      const nh = linkHtml(body.innerHTML); if (nh !== body.innerHTML) { body.innerHTML = nh; }
+      if (cleanHtml(body.innerHTML) !== it.html) { it.html = cleanHtml(body.innerHTML); save(); }
+      setTimeout(() => { if (B.focus && B.focus.body === body && !document.activeElement.closest('.bt-tools')) { B.focus = null; drawTools(); } place(); }, 150); });
     body.addEventListener('paste', (e) => { e.preventDefault(); const tx = (e.clipboardData || window.clipboardData).getData('text/plain'); document.execCommand('insertText', false, tx); });
   } else if (it.type === 'image') {
     const img = h('img', { alt: '' });
     if (B.imgs[it.fileId]) img.src = B.imgs[it.fileId];
     else APP.api('getFile', { fileId: it.fileId }).then((f) => { B.imgs[it.fileId] = `data:${f.mime};base64,${f.data}`; img.src = B.imgs[it.fileId]; img.onload = () => place(); }).catch(() => { img.alt = '이미지를 불러오지 못했어요'; });
     img.onload = () => place();
-    body = h('div', { class: 'bi-img' }, img);
+    body = h('div', { class: 'bi-img' + (it.link ? ' has-link' : ''), title: it.link ? it.link + ' (누르면 열려요)' : null }, img, it.link ? h('span', { class: 'bi-link' }, '🔗') : null);
+    if (it.link) {
+      let sx = 0, sy = 0;
+      img.addEventListener('pointerdown', (e) => { sx = e.clientX; sy = e.clientY; });
+      img.addEventListener('click', (e) => { if (Math.abs(e.clientX - sx) + Math.abs(e.clientY - sy) < 8) openLink(it.link); });
+    }
   } else body = widgetBody(it, ctx);
   el.append(body);
   if (!locked) {
     const grip = h('div', { class: 'bi-grip', title: '끌어서 옮기기' }, '⠿');
     const tools = h('div', { class: 'bi-tools' },
-      it.type === 'image' ? [h('button', { title: '작게', onclick: () => resize(it, el, 0.85) }, '−'), h('button', { title: '크게', onclick: () => resize(it, el, 1.18) }, '+')] : null,
+      it.type === 'image' ? [h('button', { title: '링크 걸기', onclick: () => editLink(it) }, '🔗'), h('button', { title: '작게', onclick: () => resize(it, el, 0.85) }, '−'), h('button', { title: '크게', onclick: () => resize(it, el, 1.18) }, '+')] : null,
       it.type === 'widget' ? null : h('button', { title: '삭제', onclick: () => { if (it.type === 'text' && (it.html || '').trim() && !confirm('이 글상자를 지울까요?')) return; removeItem(it); } }, '✕'));
-    el.append(grip, tools);
-    grip.addEventListener('pointerdown', (ev) => drag(ev, el, it));
+    const rz = h('div', { class: 'bi-resize', title: '끌어서 크기 바꾸기' });
+    el.append(grip, tools, rz);
+    grip.addEventListener('pointerdown', (ev) => { if (document.activeElement && document.activeElement.isContentEditable) document.activeElement.blur(); select(it.id); drag(ev, el, it); });
+    rz.addEventListener('pointerdown', (ev) => { select(it.id); resizeDrag(ev, el, it); });
   }
+  el.addEventListener('pointerdown', (ev) => {
+    if (ev.target.closest('button')) return;
+    // 글상자 안이 아닌 곳(테두리·손잡이)을 누르면 글쓰기를 끝내고 상자를 고른 상태로 → 단축키 사용
+    if (!ev.target.closest('.bt-text') && document.activeElement && document.activeElement.isContentEditable) document.activeElement.blur();
+    select(it.id);
+  });
+  if (B.sel === it.id) el.classList.add('sel');
   return el;
+}
+function editLink(it) {
+  const v = prompt('이미지를 누르면 열릴 주소 (https://…)\n비우면 링크를 없애요', it.link || 'https://');
+  if (v === null) return;
+  const u = v.trim();
+  if (u && u !== 'https://' && !safeUrl(u)) return toast('https:// 로 시작하는 주소를 넣어 주세요', true);
+  pushUndo();
+  if (u && u !== 'https://') it.link = u; else delete it.link;
+  save(); render(); toast(it.link ? '링크를 걸었어요' : '링크를 없앴어요');
 }
 function resize(it, el, k) {
   const L = pin(), z = L._z || 1, Wu = B.canvas.clientWidth / z, p = L[it.id] || { x: 0, y: 0, w: el.offsetWidth };
@@ -214,13 +340,89 @@ function resize(it, el, k) {
   save(); place();
 }
 function removeItem(it) {
+  pushUndo();
   B.data.items = B.data.items.filter((x) => x !== it);
   Object.values(B.data.layouts).forEach((L) => { delete L[it.id]; });
-  if (it.type === 'image' && it.fileId) APP.api('delFile', { fileId: it.fileId }).catch(() => {});
+  if (B.sel === it.id) B.sel = null;
   save(); render();
 }
+/* 모서리를 끌어서 크기 바꾸기 (이미지는 비율 그대로) */
+function resizeDrag(ev, el, it) {
+  ev.preventDefault(); ev.stopPropagation(); pushUndo();
+  const L = pin(), z = L._z || 1, Wu = B.canvas.clientWidth / z;
+  const p0 = { ...(L[it.id] || { x: el.offsetLeft, y: el.offsetTop, w: el.offsetWidth }) }, h0 = p0.h || el.offsetHeight, sx = ev.clientX, sy = ev.clientY;
+  ev.target.setPointerCapture(ev.pointerId); el.classList.add('dragging');
+  let p = { ...p0 };
+  const mv = (e) => {
+    const w = Math.max(60, Math.min(Wu - p0.x, p0.w + (e.clientX - sx) / z));
+    p = { ...p0, w };
+    if (it.type !== 'image') { p.h = Math.max(40, h0 + (e.clientY - sy) / z); el.style.height = p.h + 'px'; }
+    el.style.width = w + 'px';
+    if (it.type === 'widget') fitSub(el, !!p.h);
+  };
+  const up = () => { ev.target.removeEventListener('pointermove', mv); ev.target.removeEventListener('pointerup', up); el.classList.remove('dragging'); if (it.type === 'image') it.w = p.w; L[it.id] = p; save(); place(); };
+  ev.target.addEventListener('pointermove', mv); ev.target.addEventListener('pointerup', up);
+}
+/* ---------- 고르기 · 단축키 (Ctrl+C / X / V / Z) ---------- */
+function select(id) {
+  B.sel = id;
+  if (B.inner) B.inner.querySelectorAll('.bi').forEach((e) => e.classList.toggle('sel', e.dataset.id === id));
+}
+function pushUndo() {
+  if (!B.data) return;
+  B.hist = B.hist || []; B.hist.push(JSON.stringify({ items: B.data.items, layouts: B.data.layouts }));
+  if (B.hist.length > 40) B.hist.shift();
+}
+function undo() {
+  if (!B.hist || !B.hist.length) return toast('되돌릴 작업이 없어요');
+  const o = JSON.parse(B.hist.pop()); B.data.items = o.items; B.data.layouts = o.layouts; save(); render();
+}
+function copySel(cut) {
+  const it = B.data.items.find((x) => x.id === B.sel); if (!it) return;
+  const pos = (B.cur || {})[it.id];
+  if (it.type === 'widget' && !cut) return toast('불러온 상자는 복사할 수 없어요. Ctrl+X → Ctrl+V로 맨 위로 올릴 수는 있어요.');
+  B.clip = { item: JSON.parse(JSON.stringify(it)), pos: pos ? { ...pos } : null, cut, layouts: JSON.parse(JSON.stringify(Object.fromEntries(Object.entries(B.data.layouts).map(([k, L]) => [k, L[it.id] || null])))) };
+  if (cut) {
+    if (it.type === 'widget') { B.clip.moveId = it.id; toast('붙여넣으면(Ctrl+V) 맨 위로 올라와요'); return; }
+    pushUndo();
+    B.data.items = B.data.items.filter((x) => x !== it); B.sel = null; save(); render();
+  } else toast('복사했어요. Ctrl+V로 붙여넣으세요');
+}
+function pasteClip() {
+  const c = B.clip; if (!c) return false;
+  pushUndo();
+  if (c.moveId) {   // 불러온 상자: 맨 위(맨 뒤 순서)로
+    const it = B.data.items.find((x) => x.id === c.moveId);
+    if (it) { B.data.items = B.data.items.filter((x) => x !== it).concat(it); B.sel = it.id; }
+    B.clip = null; save(); render(); return true;
+  }
+  const it = { ...JSON.parse(JSON.stringify(c.item)), id: c.cut ? c.item.id : uid() };
+  if (B.data.items.some((x) => x.id === it.id)) it.id = uid();
+  B.data.items.push(it);   // 가장 나중에 붙인 것이 맨 위
+  const d = c.cut ? 0 : 20;
+  Object.entries(c.layouts || {}).forEach(([k, p]) => { if (p && B.data.layouts[k]) B.data.layouts[k][it.id] = { ...p, x: p.x + d, y: p.y + d }; });
+  if (c.pos) { const L = pin(); L[it.id] = { ...c.pos, x: c.pos.x + d, y: c.pos.y + d }; }
+  if (c.cut) B.clip = null; else c.pos = c.pos ? { ...c.pos, x: c.pos.x + d, y: c.pos.y + d } : null;
+  B.sel = it.id; save(); render(); return true;
+}
+const boardActive = () => B.panel && B.panel.isConnected && B.data && !B.data.locked && !document.querySelector('.overlay');
+const editing = () => { const a = document.activeElement; return a && (a.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)); };
+document.addEventListener('keydown', (e) => {
+  if (!boardActive() || editing()) return;
+  const k = e.key.toLowerCase(), mod = e.ctrlKey || e.metaKey;
+  if (mod && k === 'z') { e.preventDefault(); undo(); }
+  else if (mod && k === 'c' && B.sel) { e.preventDefault(); copySel(false); }
+  else if (mod && k === 'x' && B.sel) { e.preventDefault(); copySel(true); }
+  else if ((k === 'delete' || k === 'backspace') && B.sel) { const it = B.data.items.find((x) => x.id === B.sel); if (it && it.type !== 'widget') { e.preventDefault(); removeItem(it); } }
+});
+document.addEventListener('paste', (e) => {
+  if (!boardActive() || editing()) return;
+  const f = [...((e.clipboardData || {}).items || [])].find((x) => x.kind === 'file' && /^image\//.test(x.type));
+  if (f) { e.preventDefault(); addImage(f.getAsFile()); return; }
+  if (B.clip) { e.preventDefault(); pasteClip(); }
+});
 function drag(ev, el, it) {
-  ev.preventDefault();
+  ev.preventDefault(); pushUndo();
   const L = pin(), z = L._z || 1, Wu = B.canvas.clientWidth / z;   // 이때부터 이 화면 크기는 자유 배치
   const p0 = L[it.id] || { x: el.offsetLeft, y: el.offsetTop, w: el.offsetWidth }, sx = ev.clientX, sy = ev.clientY;
   el.classList.add('dragging'); el.setPointerCapture(ev.pointerId);
@@ -245,12 +447,16 @@ function applyStyle(kind, v) {
     document.execCommand('styleWithCSS', false, true);
     if (kind === 'color') document.execCommand('foreColor', false, v);
     else if (kind === 'bold') document.execCommand('bold');
+    else if (kind === 'underline') document.execCommand('underline');
+    else if (kind === 'italic') document.execCommand('italic');
     else if (kind === 'size') { document.execCommand('fontSize', false, '7'); f.body.querySelectorAll('font[size="7"], span[style*="xxx-large"]').forEach((n) => { const s = document.createElement('span'); s.style.fontSize = v + 'px'; s.append(...n.childNodes); n.replaceWith(s); }); }
     f.it.html = cleanHtml(f.body.innerHTML);
   } else {       // 글상자 전체
     const st = (f.it.style = f.it.style || {});
+    pushUndo();
     if (kind === 'color') st.color = v; else if (kind === 'bold') st.bold = !st.bold; else if (kind === 'size') st.size = v;
-    f.body.style.color = st.color || '#1f2937'; f.body.style.fontSize = (st.size || 20) + 'px'; f.body.style.fontWeight = st.bold ? 700 : 400;
+    else if (kind === 'underline') st.underline = !st.underline; else if (kind === 'italic') st.italic = !st.italic;
+    f.body.setAttribute('style', boxStyle(st));
   }
   save(); setTimeout(place, 0);
 }
@@ -265,13 +471,15 @@ function drawTools() {
     ...COLORS.map((c) => h('button', { class: 'bt-color' + ((st.color || '#1f2937') === c ? ' on' : ''), style: `background:${c}`, title: '글씨 색', onmousedown: keep, onclick: () => { applyStyle('color', c); drawTools(); } })),
     h('select', { title: '글씨 크기', onmousedown: (e) => e.stopPropagation(), onchange: (e) => { applyStyle('size', Number(e.target.value)); } }, SIZES.map((s) => h('option', { value: s, selected: s === (st.size || 20) }, s + 'px'))),
     h('button', { class: 'bt-bold' + (st.bold ? ' on' : ''), title: '굵게', onmousedown: keep, onclick: () => { applyStyle('bold'); drawTools(); } }, 'B'),
+    h('button', { class: 'bt-bold bt-i' + (st.italic ? ' on' : ''), title: '기울임', onmousedown: keep, onclick: () => { applyStyle('italic'); drawTools(); } }, 'I'),
+    h('button', { class: 'bt-bold bt-u' + (st.underline ? ' on' : ''), title: '밑줄', onmousedown: keep, onclick: () => { applyStyle('underline'); drawTools(); } }, 'U'),
     h('span', { class: 'muted', style: 'font-size:11px' }, '글자를 고르면 고른 부분만 바뀌어요'));
 }
 
 /* ---------- 새 상자 ---------- */
 function addText() {
   const it = { id: uid(), type: 'text', html: '', style: { size: 24, color: '#1f2937' } };
-  B.data.items.push(it); save(); render();
+  pushUndo(); B.data.items.push(it); B.sel = it.id; save(); render();
   setTimeout(() => { const b = B.inner.querySelector(`[data-id="${it.id}"] .bt-text`); if (b) b.focus(); }, 30);
 }
 async function addImage(file) {
@@ -286,8 +494,12 @@ async function addImage(file) {
     toast('이미지를 올리는 중…');
     const j = await APP.api('uploadFile', { name: '학급보드_' + Date.now() + (png ? '.png' : '.jpg'), mime, data: out.split(',')[1] });
     B.imgs[j.fileId] = out;
-    B.data.items.push({ id: uid(), type: 'image', fileId: j.fileId, w: Math.min(260, cv.width) });
-    save(); render(); toast('이미지를 붙였어요');
+    let qr = await readQR(cv);
+    if (qr && !safeUrl(qr)) qr = '';
+    const nit = { id: uid(), type: 'image', fileId: j.fileId, w: Math.min(260, cv.width) };
+    if (qr) nit.link = qr;
+    pushUndo(); B.data.items.push(nit);
+    save(); render(); toast(qr ? 'QR 코드를 읽어 링크를 걸었어요' : '이미지를 붙였어요');
   } catch (e) { toast(errMsg(e), true); }
 }
 
@@ -297,18 +509,13 @@ function settings() {
   const curB = B.index.boards.find((b) => b.id === B.index.cur);
   const nameIn = h('input', { value: curB ? curB.name : '', style: 'flex:1;margin:0;width:auto', maxlength: 20 });
   const box = h('div');
+  let tab = 'basic';
   const draw = () => {
     const boards = APP.S.boards;
     const dateIn = h('input', { type: 'date', value: ymd(new Date()) }), textIn = h('input', { placeholder: '일정 내용 (예: 현장체험학습)', style: 'flex:1;min-width:160px' });
     const per = new Set(), notice = { v: false };
-    box.replaceChildren(
-      h('div', { class: 'opt-title' }, '보드 이름'),
-      h('div', { class: 'row', style: 'gap:6px;justify-content:flex-start' }, nameIn,
-        B.index.boards.length > 1 ? h('button', { class: 'sm danger', onclick: () => { ov.remove(); removeBoard(); } }, '이 보드 삭제') : null),
-      h('div', { class: 'opt-title' }, '불러올 내용'),
-      h('label', { class: 'opt' }, h('input', { type: 'checkbox', checked: c.showSubmit, onchange: (e) => { c.showSubmit = e.target.checked; draw(); } }), h('span', null, '제출확인판')),
-      c.showSubmit ? h('div', { class: 'bd-sublist' }, boards.length ? boards.map((b) => h('label', { class: 'opt sm' }, h('input', { type: 'checkbox', checked: c.submitIds.includes(b.id), onchange: (e) => { c.submitIds = e.target.checked ? [...c.submitIds, b.id] : c.submitIds.filter((x) => x !== b.id); } }), h('span', null, b.title || '제목 없는 제출판'))) : h('div', { class: 'muted' }, '제출판이 없어요.')) : null,
-      h('label', { class: 'opt' }, h('input', { type: 'checkbox', checked: c.showEvents, onchange: (e) => { c.showEvents = e.target.checked; } }), h('span', null, '다가오는 일정 (오늘부터 1주일, 공지는 날짜 전까지 항상)')),
+    const tabs = h('div', { class: 'tabs', style: 'margin-bottom:6px' }, [['basic', '기본 설정'], ['events', `일정 (${evs.length})`]].map(([k, n]) => h('button', { class: 'tab sm' + (tab === k ? ' active' : ''), onclick: () => { tab = k; draw(); } }, n)));
+    if (tab === 'events') return box.replaceChildren(tabs,
       h('div', { class: 'opt-title' }, '일정 추가'),
       h('div', { class: 'bd-evform' },
         h('div', { class: 'row', style: 'gap:6px;flex-wrap:wrap' }, dateIn, textIn),
@@ -318,16 +525,25 @@ function settings() {
             if (!dateIn.value) return toast('날짜를 고르세요', true); if (!textIn.value.trim()) return toast('일정 내용을 적어 주세요', true);
             evs.push({ id: uid(), date: dateIn.value, periods: [...per].sort((a, b) => a - b), text: textIn.value.trim().slice(0, 100), notice: notice.v }); draw();
           } }, '추가'))),
+      h('div', { class: 'opt-title' }, `추가된 일정 ${evs.length}개`),
       h('div', { class: 'bd-evlist' }, evs.length ? evs.slice().sort((a, b) => a.date.localeCompare(b.date)).map((e) => h('div', { class: 'list-item' + (e.date < ymd(new Date()) ? ' past' : '') },
         h('span', null, (e.notice ? '📌 ' : '') + mdw(e.date) + (e.periods.length ? ` · ${e.periods.join(',')}교시` : '') + ' · ' + e.text),
         h('button', { class: 'sm ghost', onclick: () => { evs.splice(evs.indexOf(e), 1); draw(); } }, '✕'))) : h('div', { class: 'muted' }, '등록한 일정이 없어요.')));
+    box.replaceChildren(tabs,
+      h('div', { class: 'opt-title' }, '보드 이름'),
+      h('div', { class: 'row', style: 'gap:6px;justify-content:flex-start' }, nameIn,
+        B.index.boards.length > 1 ? h('button', { class: 'sm danger', onclick: () => { ov.remove(); removeBoard(); } }, '이 보드 삭제') : null),
+      h('div', { class: 'opt-title' }, '불러올 내용'),
+      h('label', { class: 'opt' }, h('input', { type: 'checkbox', checked: c.showSubmit, onchange: (e) => { c.showSubmit = e.target.checked; draw(); } }), h('span', null, '제출확인판')),
+      c.showSubmit ? h('div', { class: 'bd-sublist' }, boards.length ? boards.map((b) => h('label', { class: 'opt sm' }, h('input', { type: 'checkbox', checked: c.submitIds.includes(b.id), onchange: (e) => { c.submitIds = e.target.checked ? [...c.submitIds, b.id] : c.submitIds.filter((x) => x !== b.id); } }), h('span', null, b.title || '제목 없는 제출판'))) : h('div', { class: 'muted' }, '제출판이 없어요.')) : null,
+      h('label', { class: 'opt' }, h('input', { type: 'checkbox', checked: c.showEvents, onchange: (e) => { c.showEvents = e.target.checked; } }), h('span', null, '다가오는 일정 (오늘부터 1주일, 공지는 날짜 전까지 항상)')));
   };
   draw();
   const close = () => ov.remove();
   const ov = h('div', { class: 'overlay' }, h('div', { class: 'modal sub-cfg bd-cfg' }, h('h3', null, '학급보드판 설정'), box,
     h('div', { class: 'row', style: 'justify-content:flex-end;margin-top:14px' }, h('button', { onclick: close }, '취소'),
       h('button', { class: 'primary', onclick: () => {
-        d.cfg = c; d.events = evs; syncWidgets(); save();
+        pushUndo(); d.cfg = c; d.events = evs; syncWidgets(); save();
         if (curB && nameIn.value.trim() && nameIn.value.trim() !== curB.name) { curB.name = nameIn.value.trim().slice(0, 20); saveIndex(); }
         close(); render();
       } }, '적용'))));
@@ -354,7 +570,7 @@ function drawHead() {
       : h('b', { class: 'bd-name' }, '학급보드판'),
     ...(d.locked ? [] : [h('button', { class: 'sm', onclick: addText }, '+ 글상자'), h('button', { class: 'sm', onclick: () => fileIn.click() }, '+ 이미지'), fileIn]),
     h('div', { style: 'flex:1' }),
-    ...(d.locked ? [] : [h('button', { class: 'sm', onclick: settings }, '설정'), h('button', { class: 'sm', title: '열에 맞춰 다시 정렬', onclick: () => { d.layouts = {}; save(); render(); } }, '자동정렬'),
+    ...(d.locked ? [] : [h('button', { class: 'sm', onclick: settings }, '설정'), h('button', { class: 'sm', title: '열에 맞춰 다시 정렬', onclick: () => { pushUndo(); d.layouts = {}; save(); render(); } }, '자동정렬'),
       h('button', { class: 'sm', title: '빈 보드를 새로 만들어요 (지금 보드는 그대로 남아요)', onclick: addBoard }, '+ 보드 추가')]),
     h('button', { class: 'sm', title: '전체화면', onclick: () => { const w = B.panel.closest('.bd-page') || B.panel; document.fullscreenElement ? document.exitFullscreen() : (w.requestFullscreen && w.requestFullscreen()); } }, document.fullscreenElement ? '전체화면 끝' : '전체화면'),
     h('button', { class: 'sm' + (d.locked ? ' primary' : ''), title: '잠그면 학생이 보드를 고칠 수 없어요', onclick: () => { d.locked = !d.locked; save(); render(); } }, d.locked ? '🔒 잠김' : '잠금'));
@@ -366,12 +582,7 @@ function mount(ctx) {
   B.inner = h('div', { class: 'bd-inner' });
   B.canvas = h('div', { class: 'bd-canvas' }, B.inner);
   B.panel = h('div', { class: 'bd-panel' }, headEl, toolsEl, B.canvas);
-  // 이미지 붙여넣기
-  B.panel.addEventListener('paste', (e) => {
-    if (B.data && B.data.locked) return;
-    const f = [...(e.clipboardData || {}).items || []].find((x) => x.kind === 'file' && /^image\//.test(x.type));
-    if (f) { e.preventDefault(); addImage(f.getAsFile()); }
-  });
+  B.canvas.addEventListener('pointerdown', (e) => { if (e.target === B.canvas || e.target === B.inner) select(null); });
   B.panel.tabIndex = -1;
   headEl.append(h('span', { class: 'muted' }, '불러오는 중…'));
   load().then(render);

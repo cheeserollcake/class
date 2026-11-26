@@ -47,10 +47,11 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--primary); o
 .side-toggle { background: transparent; border: 1px solid var(--line); width: 28px; height: 28px; padding: 0; border-radius: 6px; font-size: 15px; color: var(--sub); line-height: 1; }
 .side-toggle:hover { background: var(--bg); }
 .side { transition: width .2s; }
-.side.closed { width: 46px; padding: 18px 8px; }
-.side.closed > *:not(.brand) { display: none; }
-.side.closed .brand { padding: 4px 0 14px; justify-content: center; }
-.side.closed .brand span { display: none; }
+.side.closed { display: none !important; }
+.side-toggle-m { display: none; }
+.menu-fab { display: none; position: fixed; left: 10px; bottom: 10px; z-index: 60; width: 40px; height: 40px; border-radius: 50%; border: 1px solid var(--line); background: var(--surface); color: var(--sub); font-size: 18px; padding: 0; opacity: .75; }
+.menu-fab:hover { opacity: 1; background: var(--bg); }
+.menu-fab.show { display: block; }
 .nav-btn { text-align: left; background: transparent; padding: 10px 12px; width: 100%; display: flex; justify-content: space-between; align-items: center; }
 .nav-btn:hover { background: #f3f4f6; }
 .nav-btn.active { background: var(--primary); color: #fff; }
@@ -141,7 +142,7 @@ input.n { width: 64px; text-align: center; }
   .shell { flex-direction: column; }
   .side { width: 100%; flex-direction: row; overflow-x: auto; padding: 8px; border-right: 0; border-bottom: 1px solid var(--line); gap: 4px; }
   .side .brand, .side .who, .side .spacer { display: none; }
-  .side.closed { width: 100%; padding: 8px; } .side.closed > *:not(.brand) { display: flex; } .side.closed .who, .side.closed .spacer { display: none; }
+  .side-toggle-m { display: inline-block; flex-shrink: 0; background: transparent; border: 1px solid var(--line); border-radius: 6px; font-size: 13px; color: var(--sub); padding: 6px 10px; white-space: nowrap; }
   .nav-btn { width: auto; white-space: nowrap; padding: 8px 12px; gap: 6px; }
   .main { padding: 16px 12px 40px; }
 }
@@ -537,3 +538,25 @@ input.gcell.locked { background: #f3f4f6 !important; color: var(--sub); }
 .bd-sel { font-weight: 700; font-size: 14px; padding: 4px 8px; max-width: 160px; }
 .bd-page .bd-panel { width: 100%; min-width: 0; flex: none; }
 .bd-page:fullscreen { background: var(--bg); padding: 12px; }
+
+/* 학급보드판: 크기 조절·고르기·제출판 상자 */
+.bi.sel { outline: 2px solid #2f6fed; outline-offset: 1px; }
+.bi-resize { position: absolute; right: -1px; bottom: -1px; width: 16px; height: 16px; cursor: nwse-resize; opacity: 0; touch-action: none;
+  background: linear-gradient(135deg, transparent 50%, #9aa3af 50%, #9aa3af 60%, transparent 60%, transparent 70%, #9aa3af 70%, #9aa3af 80%, transparent 80%); border-bottom-right-radius: 10px; }
+.bi:hover .bi-resize, .bi.sel .bi-resize { opacity: 1; }
+.bi:hover .bi-grip, .bi.sel .bi-grip { opacity: 1; }
+.bi-widget { overflow: hidden; }
+.bi-text { overflow: hidden; }
+.bt-i { font-style: italic; font-family: serif; } .bt-u { text-decoration: underline; }
+.bw-title { display: flex; align-items: center; gap: 4px; }
+.bw-lock { padding: 1px 8px; font-size: 12px; background: #fff; border: 1px solid var(--line); border-radius: 6px; }
+.bw-lock.on { background: var(--primary); color: #fff; border-color: var(--primary); }
+.bw-cells { display: grid; gap: 4px; grid-template-columns: repeat(auto-fill, minmax(64px, 1fr)); }
+.bw-cell { display: flex; align-items: center; justify-content: center; padding: 0 2px; cursor: pointer; user-select: none; white-space: nowrap; overflow: hidden; font-size: inherit; }
+.bw-sub.locked .bw-cell { cursor: default; }
+.bd-evlist { max-height: 240px; overflow-y: auto; padding-right: 4px; }
+/* 보드 링크 */
+.bt-text a { color: #2563eb; text-decoration: underline; cursor: pointer; word-break: break-all; }
+.bi-img { position: relative; }
+.bi-img.has-link img { cursor: pointer; }
+.bi-link { position: absolute; right: 6px; bottom: 6px; background: rgba(255,255,255,.9); border: 1px solid var(--line); border-radius: 6px; font-size: 12px; padding: 1px 5px; pointer-events: none; }
