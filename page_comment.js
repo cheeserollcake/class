@@ -84,13 +84,14 @@ function manageSubj(redraw) {
       (sb ? sb.items : []).map((x) => h('option', { value: x.id, selected: x.id === r.itemId }, x.name || '(이름 없음)')));
     const bSel = h('select', { onchange: (e) => { r.band = Number(e.target.value); saveLater(key); } }, labels.map((l, i) => h('option', { value: i, selected: i === r.band }, l)));
     const ta = textCell(r, key); if (CM.focus === r.id) { setTimeout(() => ta.focus(), 30); CM.focus = null; }
-    return h('tr', null, h('td', null, sSel), h('td', null, iSel), h('td', null, bSel), h('td', { class: 'cm-tcell' }, ta),
+    sSel.className = 'w-subj'; iSel.className = 'w-item'; bSel.className = 'w-band';
+    return h('tr', null, h('td', { class: 'cm-sel' }, sSel), h('td', { class: 'cm-sel' }, iSel), h('td', { class: 'cm-sel' }, bSel), h('td', { class: 'cm-tcell' }, ta),
       h('td', null, delBtn(() => { if (r.text && !confirm('이 평어를 삭제할까요?')) return; CM.kv[key] = list.filter((x) => x !== r); saveLater(key, 0); redraw(); })));
   });
   return h('div', { class: 'card' },
     h('div', { class: 'row', style: 'gap:8px;flex-wrap:wrap;margin-bottom:10px' },
       h('select', { onchange: (e) => { CM.subjF = e.target.value; redraw(); } }, h('option', { value: '' }, '모든 과목'), subs.map((x) => h('option', { value: x.id, selected: x.id === CM.subjF }, x.name || '(이름 없음)'))),
-      h('button', { class: 'sm primary', onclick: add }, '+ 평어 추가'),
+      h('button', { class: 'sm primary', onclick: add }, '+ 평어 추가'), ...bulkButtons('subj', redraw),
       h('button', { class: 'sm', onclick: importBase, title: '기초작업의 과목 × 평가기준 × 평어마다 빈 칸을 만들어요' }, '기초작업에서 불러오기'),
       h('div', { style: 'flex:1' }), status),
     h('div', { class: 'muted', style: 'margin-bottom:8px' }, `${s}학기 수행평가 기초작업의 과목·평가기준·평어를 골라 문장을 적어요. 같은 칸에 여러 문장을 넣을수록 평어 생성 때 학생마다 다른 문장을 고르기 쉬워요.`),
@@ -120,13 +121,14 @@ function manageCC(redraw) {
     const sSel = h('select', { onchange: (e) => { r.subj = e.target.value; saveLater(key); } }, subs.map((n) => h('option', { value: n, selected: n === r.subj }, n)));
     const dIn = h('input', { type: 'date', value: r.date || '', onchange: (e) => { r.date = e.target.value; saveLater(key, 0); } });
     const ta = textCell(r, key); if (CM.focus === r.id) { setTimeout(() => ta.focus(), 30); CM.focus = null; }
-    return h('tr', null, h('td', null, sSel), h('td', null, dIn), h('td', { class: 'cm-tcell' }, ta),
+    sSel.className = 'w-subj'; dIn.className = 'w-date';
+    return h('tr', null, h('td', { class: 'cm-sel' }, sSel), h('td', { class: 'cm-sel' }, dIn), h('td', { class: 'cm-tcell' }, ta),
       h('td', null, delBtn(() => { if (r.text && !confirm('이 평어를 삭제할까요?')) return; d.rows = d.rows.filter((x) => x !== r); saveLater(key, 0); redraw(); })));
   });
   return h('div', { class: 'card' }, chips,
     h('div', { class: 'row', style: 'gap:8px;flex-wrap:wrap;margin:12px 0 10px' },
       h('select', { onchange: (e) => { CM.ccF = e.target.value; redraw(); } }, h('option', { value: '' }, '모든 과목'), subs.map((n) => h('option', { value: n, selected: n === CM.ccF }, n))),
-      h('button', { class: 'sm primary', onclick: () => { const r = { id: uid(), subj: CM.ccF || subs[0], date: APP.today(), text: '' }; d.rows.push(r); CM.focus = r.id; saveLater(key); redraw(); } }, '+ 평어 추가'),
+      h('button', { class: 'sm primary', onclick: () => { const r = { id: uid(), subj: CM.ccF || subs[0], date: APP.today(), text: '' }; d.rows.push(r); CM.focus = r.id; saveLater(key); redraw(); } }, '+ 평어 추가'), ...bulkButtons('cc', redraw),
       h('div', { style: 'flex:1' }), status),
     shown.length ? h('div', { class: 'table-wrap' }, h('table', { class: 'roster cm-table' },
       h('thead', null, h('tr', null, ['과목', '날짜', '내용', ''].map((t) => h('th', null, t)))), h('tbody', null, rows)))
@@ -138,23 +140,112 @@ function manageBeh(redraw) {
   const f = CM.behF;
   const shown = list.filter((r) => !f || (f === 'pos' || f === 'neg' ? r.pol === f : r.kind === f));
   const rows = shown.map((r) => {
-    const pSel = h('select', { class: 'cm-pol ' + r.pol, onchange: (e) => { r.pol = e.target.value; e.target.className = 'cm-pol ' + r.pol; saveLater(key); } }, [['pos', '긍정'], ['neg', '부정']].map(([v, n]) => h('option', { value: v, selected: r.pol === v }, n)));
+    const pSel = h('select', { class: 'cm-pol ' + r.pol, onchange: (e) => { r.pol = e.target.value; e.target.className = 'cm-pol w-pol ' + r.pol; saveLater(key); } }, [['pos', '긍정'], ['neg', '부정']].map(([v, n]) => h('option', { value: v, selected: r.pol === v }, n)));
     const kSel = h('select', { onchange: (e) => { r.kind = e.target.value; saveLater(key); } }, [['subj', '교과'], ['act', '행동']].map(([v, n]) => h('option', { value: v, selected: r.kind === v }, n)));
     const ta = textCell(r, key); if (CM.focus === r.id) { setTimeout(() => ta.focus(), 30); CM.focus = null; }
-    return h('tr', null, h('td', null, pSel), h('td', null, kSel), h('td', { class: 'cm-tcell' }, ta),
+    pSel.classList.add('w-pol'); kSel.className = 'w-pol';
+    return h('tr', null, h('td', { class: 'cm-sel' }, pSel), h('td', { class: 'cm-sel' }, kSel), h('td', { class: 'cm-tcell' }, ta),
       h('td', null, delBtn(() => { if (r.text && !confirm('이 평어를 삭제할까요?')) return; CM.kv[key] = list.filter((x) => x !== r); saveLater(key, 0); redraw(); })));
   });
   const cnt = (fn) => list.filter((r) => r.text && fn(r)).length;
   return h('div', { class: 'card' },
     h('div', { class: 'row', style: 'gap:8px;flex-wrap:wrap;margin-bottom:10px' },
       h('select', { onchange: (e) => { CM.behF = e.target.value; redraw(); } }, [['', '전체'], ['pos', '긍정만'], ['neg', '부정만'], ['subj', '교과만'], ['act', '행동만']].map(([v, n]) => h('option', { value: v, selected: v === f }, n))),
-      h('button', { class: 'sm primary', onclick: () => { const r = { id: uid(), pol: f === 'neg' ? 'neg' : 'pos', kind: f === 'act' ? 'act' : 'subj', text: '' }; list.push(r); CM.focus = r.id; saveLater(key); redraw(); } }, '+ 평어 추가'),
+      h('button', { class: 'sm primary', onclick: () => { const r = { id: uid(), pol: f === 'neg' ? 'neg' : 'pos', kind: f === 'act' ? 'act' : 'subj', text: '' }; list.push(r); CM.focus = r.id; saveLater(key); redraw(); } }, '+ 평어 추가'), ...bulkButtons('beh', redraw),
       h('span', { class: 'muted' }, `교과 긍정 ${cnt((r) => r.kind === 'subj' && r.pol === 'pos')} · 행동 긍정 ${cnt((r) => r.kind === 'act' && r.pol === 'pos')} · 부정 ${cnt((r) => r.pol === 'neg')}`),
       h('div', { style: 'flex:1' }), status),
     h('div', { class: 'muted', style: 'margin-bottom:8px' }, '행동특성 및 종합의견에 쓸 문장이에요. 다른 학생의 이름은 넣지 마세요. (이름이 들어간 문장은 평어 생성에서 빠져요)'),
     shown.length ? h('div', { class: 'table-wrap' }, h('table', { class: 'roster cm-table' },
       h('thead', null, h('tr', null, ['긍정/부정', '교과/행동', '내용', ''].map((t) => h('th', null, t)))), h('tbody', null, rows)))
       : h('div', { class: 'placeholder' }, '아직 평어가 없어요. "+ 평어 추가"를 눌러 보세요.'));
+}
+
+/* ---------- 엑셀 일괄 업로드 / 양식 ---------- */
+const HEAD = { subj: ['과목', '평가기준', '평어', '내용'], cc: ['과목', '날짜', '내용'], beh: ['긍정/부정', '교과/행동', '내용'] };
+const NAME = { subj: '교과 평어', cc: '창체 평어', beh: '행발 평어' };
+function bulkButtons(kind, redraw) {
+  const fileIn = h('input', { type: 'file', accept: '.xlsx,.csv', hidden: true, onchange: async (e) => {
+    const f = e.target.files[0]; e.target.value = ''; if (!f) return;
+    try { const rows = await APP.xl.readTableFile(f); const r = importRows(kind, rows); saveLater(kind === 'subj' ? K.subj(sem()) : kind === 'cc' ? K.cc(sem()) : K.beh(sem()), 0);
+      toast(`${r.added}개를 추가했어요` + (r.dup ? ` · 이미 있는 ${r.dup}개는 건너뜀` : '') + (r.bad.length ? ` · ${r.bad.length}줄은 읽지 못함` : ''), !r.added && r.bad.length > 0);
+      if (r.bad.length) setTimeout(() => alert('읽지 못한 줄:\n' + r.bad.slice(0, 15).join('\n') + (r.bad.length > 15 ? `\n…외 ${r.bad.length - 15}줄` : '')), 50);
+      redraw();
+    } catch (x) { toast(errMsg(x), true); }
+  } });
+  return [fileIn, h('button', { class: 'sm', onclick: () => fileIn.click() }, '엑셀 일괄 업로드'), h('button', { class: 'sm ghost', onclick: () => template(kind) }, '업로드 양식 받기')];
+}
+function template(kind) {
+  const s = sem(), labels = GR().cfg.labels, rows = [HEAD[kind]], sheet = { name: NAME[kind], widths: kind === 'subj' ? [14, 22, 12, 70] : kind === 'cc' ? [14, 14, 70] : [12, 12, 70], lists: [] };
+  if (kind === 'subj') {
+    const subs = GR().cfg.perf[s] || [];
+    subs.forEach((sb) => sb.items.forEach((it) => labels.forEach((l) => rows.push([sb.name, it.name, l, '']))));
+    if (rows.length === 1) rows.push(['국어', '발표하기', labels[0], '(예) 자신의 생각을 근거를 들어 자신 있게 발표함.']);
+    sheet.lists = [{ col: 0, values: subs.map((x) => x.name) }, { col: 1, values: [...new Set(subs.flatMap((x) => x.items.map((i) => i.name)))] }, { col: 2, values: labels }];
+  } else if (kind === 'cc') {
+    const subs = CM.kv[K.cc(s)].subjects;
+    rows.push([subs[0] || '자율', APP.today(), '(예) 학급 회의에 참여하여 학급 규칙을 정하는 데 의견을 냄.']);
+    sheet.lists = [{ col: 0, values: subs }];
+  } else {
+    rows.push(['긍정', '교과', '(예) 수업 시간에 바른 자세로 집중하여 학습함.'], ['긍정', '행동', '(예) 친구들과 사이좋게 지내며 배려하는 마음을 지님.'], ['부정', '행동', '(예) 정리 정돈하는 습관을 기를 필요가 있음.']);
+    sheet.lists = [{ col: 0, values: ['긍정', '부정'] }, { col: 1, values: ['교과', '행동'] }];
+  }
+  sheet.rows = rows;
+  APP.xl.saveBlob(APP.xl.buildXlsx([sheet]), `${s}학기 ${NAME[kind]} 업로드 양식.xlsx`);
+  toast(kind === 'subj' ? '양식을 내려받았어요. 내용 칸을 채우고, 문장을 더 넣으려면 줄을 복사해 늘리세요. (예) 줄은 지우고 올려 주세요.' : '양식을 내려받았어요. (예) 줄은 지우고 올려 주세요.');
+}
+/* 날짜: 2026-09-03, 2026.9.3, 2026/9/3, 9/3, 9월 3일, 엑셀 날짜 숫자 */
+function toDate(v) {
+  if (typeof v === 'number' && v > 20000 && v < 80000) { const d = new Date(Math.round((v - 25569) * 86400000)); return d.toISOString().slice(0, 10); }
+  const t = String(v || '').trim(); if (!t) return '';
+  const p = (y, m, d) => `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+  let m = /^(\d{4})\s*[-./년]\s*(\d{1,2})\s*[-./월]\s*(\d{1,2})/.exec(t); if (m) return p(m[1], m[2], m[3]);
+  m = /^(\d{1,2})\s*[-./월]\s*(\d{1,2})/.exec(t); if (m) return p(new Date().getFullYear(), m[1], m[2]);
+  return null;
+}
+function importRows(kind, rows) {
+  rows = rows.map((r) => (r || []).map((c) => (typeof c === 'string' ? c.trim() : c)));
+  const hi = rows.findIndex((r) => r.some((c) => String(c).replace(/\s/g, '') === '내용'));
+  if (hi < 0) throw new Error('"내용" 머리글이 있는 줄을 찾지 못했어요. 업로드 양식을 받아 그대로 채워 주세요.');
+  const head = rows[hi].map((c) => String(c).replace(/\s/g, '')), col = (n) => head.findIndex((x) => x === n.replace(/\s/g, '') || x.replace('/', '') === n.replace(/[\s/]/g, ''));
+  const s = sem(), out = { added: 0, dup: 0, bad: [] };
+  const body = rows.slice(hi + 1).map((r, i) => ({ r, line: hi + i + 2 })).filter(({ r }) => r.some((c) => String(c).trim() !== ''));
+  const ci = col('내용'), skipEx = (t) => /^\(예\)/.test(t);
+  if (kind === 'subj') {
+    const list = CM.kv[K.subj(s)], subs = GR().cfg.perf[s] || [], labels = GR().cfg.labels, [c0, c1, c2] = [col('과목'), col('평가기준'), col('평어')];
+    body.forEach(({ r, line }) => {
+      const text = String(r[ci] || '').trim(); if (!text || skipEx(text)) return;
+      const sb = subs.find((x) => x.name.trim() === String(r[c0] || '').trim()); if (!sb) return out.bad.push(`${line}줄: 과목 "${r[c0] || ''}"이(가) ${s}학기 기초작업에 없어요`);
+      const it = sb.items.find((x) => x.name.trim() === String(r[c1] || '').trim()); if (!it) return out.bad.push(`${line}줄: 평가기준 "${r[c1] || ''}"이(가) ${sb.name}에 없어요`);
+      const b = labels.findIndex((l) => l === String(r[c2] || '').trim()); if (b < 0) return out.bad.push(`${line}줄: 평어 "${r[c2] || ''}"을(를) 알 수 없어요 (${labels.join('/')})`);
+      if (list.some((x) => x.subId === sb.id && x.itemId === it.id && x.band === b && clean(x.text) === clean(text))) { out.dup++; return; }
+      const empty = list.find((x) => x.subId === sb.id && x.itemId === it.id && x.band === b && !String(x.text || '').trim());
+      if (empty) empty.text = text; else list.push({ id: uid(), subId: sb.id, itemId: it.id, band: b, text });
+      out.added++;
+    });
+  } else if (kind === 'cc') {
+    const d = CM.kv[K.cc(s)], [c0, c1] = [col('과목'), col('날짜')];
+    body.forEach(({ r, line }) => {
+      const text = String(r[ci] || '').trim(); if (!text || skipEx(text)) return;
+      const subj = String(r[c0] || '').trim(); if (!subj) return out.bad.push(`${line}줄: 과목이 비어 있어요`);
+      const date = toDate(r[c1]); if (date === null) return out.bad.push(`${line}줄: 날짜 "${r[c1]}"을(를) 읽지 못했어요 (예: 2026-09-03)`);
+      if (!d.subjects.includes(subj)) d.subjects.push(subj);
+      if (d.rows.some((x) => x.subj === subj && x.date === date && clean(x.text) === clean(text))) { out.dup++; return; }
+      d.rows.push({ id: uid(), subj, date, text }); out.added++;
+    });
+  } else {
+    const list = CM.kv[K.beh(s)], [c0, c1] = [col('긍정/부정'), col('교과/행동')];
+    body.forEach(({ r, line }) => {
+      const text = String(r[ci] || '').trim(); if (!text || skipEx(text)) return;
+      const pv = String(r[c0] || '').trim(), kv = String(r[c1] || '').trim();
+      const pol = /^(긍정|\+|o|좋음)$/i.test(pv) ? 'pos' : /^(부정|-|x|나쁨)$/i.test(pv) ? 'neg' : null;
+      const kd = /^교과/.test(kv) ? 'subj' : /^(행동|생활)/.test(kv) ? 'act' : null;
+      if (!pol) return out.bad.push(`${line}줄: 긍정/부정 "${pv}"을(를) 알 수 없어요`);
+      if (!kd) return out.bad.push(`${line}줄: 교과/행동 "${kv}"을(를) 알 수 없어요`);
+      if (list.some((x) => x.pol === pol && x.kind === kd && clean(x.text) === clean(text))) { out.dup++; return; }
+      list.push({ id: uid(), pol, kind: kd, text }); out.added++;
+    });
+  }
+  return out;
 }
 
 /* =====================================================

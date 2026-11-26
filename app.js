@@ -219,8 +219,14 @@ async function startApp() {
 /* ---------- 껍데기 / 내비게이션 ---------- */
 function renderShell() {
   const root = $('#app'); root.replaceChildren();
-  const nav = h('nav', { class: 'side' },
-    h('div', { class: 'brand' }, '학급관리'),
+  let closed = false; try { closed = localStorage.getItem('side_closed') === '1'; } catch (e) { /* 저장 안 됨 */ }
+  const tog = h('button', { class: 'side-toggle', title: closed ? '메뉴 펼치기' : '메뉴 접기', onclick: () => {
+    const c = !nav.classList.contains('closed'); nav.classList.toggle('closed', c); tog.textContent = c ? '»' : '«'; tog.title = c ? '메뉴 펼치기' : '메뉴 접기';
+    try { localStorage.setItem('side_closed', c ? '1' : '0'); } catch (e) { /* 저장 안 됨 */ }
+    window.dispatchEvent(new Event('resize'));
+  } }, closed ? '»' : '«');
+  const nav = h('nav', { class: 'side' + (closed ? ' closed' : '') },
+    h('div', { class: 'brand' }, h('span', null, '학급관리'), tog),
     TABS.map((t) => h('button', { class: 'nav-btn' + (S.tab === t.id ? ' active' : ''), onclick: () => go(t.id) },
       h('span', null, t.name), t.pw && !S.unlocked ? h('span', { class: 'lock' }, '잠김') : null)),
     h('div', { class: 'spacer' }),

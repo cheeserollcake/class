@@ -92,7 +92,9 @@ function buildXlsx(sheets) {
       if (typeof v === 'number' && isFinite(v)) return `<c r="${ref}"${st}><v>${v}</v></c>`;
       return `<c r="${ref}"${st} t="inlineStr"><is><t xml:space="preserve">${esc(v)}</t></is></c>`;
     }).join('') + '</row>').join('');
-    const dv = s.genderCol != null ? `<dataValidations count="1"><dataValidation type="list" allowBlank="1" showErrorMessage="0" sqref="${colName(s.genderCol)}2:${colName(s.genderCol)}300"><formula1>"남,여"</formula1></dataValidation></dataValidations>` : '';
+    const lists = (s.lists || []).concat(s.genderCol != null ? [{ col: s.genderCol, values: ['남', '여'] }] : [])
+      .map((l) => ({ col: l.col, f: l.values.map((v) => String(v).replace(/[",]/g, ' ')).join(',') })).filter((l) => l.f && l.f.length <= 250);
+    const dv = lists.length ? `<dataValidations count="${lists.length}">${lists.map((l) => `<dataValidation type="list" allowBlank="1" showErrorMessage="0" sqref="${colName(l.col)}2:${colName(l.col)}1000"><formula1>"${esc(l.f)}"</formula1></dataValidation>`).join('')}</dataValidations>` : '';
     return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetViews><sheetView workbookViewId="0">${s.header !== false ? '<pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/>' : ''}</sheetView></sheetViews>${cols}<sheetData>${data}</sheetData>${dv}</worksheet>`;
   });
   const files = [

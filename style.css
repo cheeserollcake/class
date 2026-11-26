@@ -43,7 +43,14 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--primary); o
 /* 레이아웃 */
 .shell { display: flex; min-height: 100vh; }
 .side { width: 210px; background: var(--surface); border-right: 1px solid var(--line); padding: 18px 12px; display: flex; flex-direction: column; gap: 4px; flex-shrink: 0; }
-.side .brand { font-weight: 700; font-size: 18px; padding: 4px 10px 14px; }
+.side .brand { font-weight: 700; font-size: 18px; padding: 4px 4px 14px 10px; display: flex; align-items: center; justify-content: space-between; }
+.side-toggle { background: transparent; border: 1px solid var(--line); width: 28px; height: 28px; padding: 0; border-radius: 6px; font-size: 15px; color: var(--sub); line-height: 1; }
+.side-toggle:hover { background: var(--bg); }
+.side { transition: width .2s; }
+.side.closed { width: 46px; padding: 18px 8px; }
+.side.closed > *:not(.brand) { display: none; }
+.side.closed .brand { padding: 4px 0 14px; justify-content: center; }
+.side.closed .brand span { display: none; }
 .nav-btn { text-align: left; background: transparent; padding: 10px 12px; width: 100%; display: flex; justify-content: space-between; align-items: center; }
 .nav-btn:hover { background: #f3f4f6; }
 .nav-btn.active { background: var(--primary); color: #fff; }
@@ -134,6 +141,7 @@ input.n { width: 64px; text-align: center; }
   .shell { flex-direction: column; }
   .side { width: 100%; flex-direction: row; overflow-x: auto; padding: 8px; border-right: 0; border-bottom: 1px solid var(--line); gap: 4px; }
   .side .brand, .side .who, .side .spacer { display: none; }
+  .side.closed { width: 100%; padding: 8px; } .side.closed > *:not(.brand) { display: flex; } .side.closed .who, .side.closed .spacer { display: none; }
   .nav-btn { width: auto; white-space: nowrap; padding: 8px 12px; gap: 6px; }
   .main { padding: 16px 12px 40px; }
 }
@@ -379,7 +387,10 @@ button.big { padding: 12px 28px; font-size: 17px; }
 
 /* 평어 관리 / 생성 */
 .cm-table td { vertical-align: top; padding: 6px; }
-.cm-table select { max-width: 160px; }
+.cm-table { min-width: 760px; }
+.cm-table td.cm-sel { width: 1%; white-space: nowrap; }
+.cm-table td.cm-sel select, .cm-table td.cm-sel input { width: auto; }
+.cm-table .w-subj { min-width: 130px; } .cm-table .w-item { min-width: 180px; } .cm-table .w-band { min-width: 108px; } .cm-table .w-date { min-width: 150px; } .cm-table .w-pol { min-width: 92px; }
 .cm-tcell { width: 100%; min-width: 260px; }
 .cm-text { width: 100%; min-height: 38px; resize: none; overflow: hidden; font: inherit; line-height: 1.5; padding: 7px 9px; border: 1px solid var(--line); border-radius: 6px; box-sizing: border-box; }
 .cm-text:focus { outline: none; border-color: var(--primary); }
@@ -404,3 +415,6 @@ select.cm-pol.neg { color: var(--danger); font-weight: 700; }
 .cm-edit-row { border: 1px solid var(--line); border-radius: 8px; padding: 8px; margin-bottom: 8px; }
 .cm-edit-row .cm-text { margin-top: 6px; }
 .cm-edit-row select { max-width: 360px; }
+table.roster.cm-table { min-width: 680px; }
+.cm-table td:last-child { width: 1%; white-space: nowrap; padding-left: 4px; }
+.cm-table td.cm-tcell { min-width: 220px; }
