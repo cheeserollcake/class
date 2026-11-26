@@ -630,7 +630,11 @@ function mount(ctx) {
 }
 function relayout() { if (B.data) place(); }
 function refresh() { if (!B.data || !B.canvas || !B.canvas.isConnected) return; const n = B.data.items.length; syncWidgets(); if (B.data.items.length !== n) return render(); B.inner.querySelectorAll('.bi-widget').forEach((el) => { const it = B.data.items.find((x) => x.id === el.dataset.id); if (it) { el.firstChild.replaceWith(widgetBody(it, CTX)); } }); place(); }
-APP.classBoard = { mount, relayout, refresh };
+function lockWidgets() {
+  if (!B.wOpen || !B.wOpen.size) return 0;
+  const n = B.wOpen.size; B.wOpen.clear(); refresh(); return n;
+}
+APP.classBoard = { mount, relayout, refresh, lockWidgets };
 
 /* 메인 메뉴: 학급보드판 */
 APP.pages.board = () => {
