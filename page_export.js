@@ -43,36 +43,56 @@ function unzip(buf) {
     const start = lo + 30 + dv.getUint16(lo + 26, true) + dv.getUint16(lo + 28, true);
     ent[name] = { method, raw: u8.subarray(start, start + csz) };
   }
-  return { get: async (name) => { const f = ent[name]; if (!f) return null; return dec.decode(f.method === 0 ? f.raw : await inflate(f.raw)); } };
+  const norm = (x) => String(x).replace(/\\/g, '/').replace(/^\/+/, '').toLowerCase();
+  const idx = {}; Object.keys(ent).forEach((k) => { idx[norm(k)] = ent[k]; });
+  return {
+    names: Object.keys(ent),
+    get: async (name) => { const f = ent[name] || idx[norm(name)]; if (!f) return null; return dec.decode(f.method === 0 ? f.raw : await inflate(f.raw)); }
+  };
 }
 const REL_NS = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
 async function readXlsx(buf) {
+  // 엑셀·한셀·구글 시트·넘버스 등 여러 프로그램이 저장한 파일을 모두 읽도록 (태그 앞 접두어, strict 형식 등)
   const z = unzip(buf), parse = (s) => new DOMParser().parseFromString(s, 'application/xml');
-  const wbx = await z.get('xl/workbook.xml'); if (!wbx) throw new Error('엑셀(.xlsx) 파일이 아니에요');
-  const sh = parse(wbx).getElementsByTagName('sheet')[0]; if (!sh) throw new Error('시트가 없어요');
-  const rid = sh.getAttributeNS(REL_NS, 'id') || sh.getAttribute('r:id');
-  const rels = parse(await z.get('xl/_rels/workbook.xml.rels')).getElementsByTagName('Relationship');
-  let target = 'worksheets/sheet1.xml'; for (const r of rels) if (r.getAttribute('Id') === rid) target = r.getAttribute('Target');
-  const path = target.startsWith('/') ? target.slice(1) : 'xl/' + target.replace(/^\.\//, '');
+  const tags = (node, name) => [...node.getElementsByTagNameNS('*', name)];
+  const attr = (el, local) => { for (const a of el.attributes) if (a.localName === local) return a.value; return null; };
+  let path = null;
+  const wbx = await z.get('xl/workbook.xml');
+  if (wbx) {
+    const sh = tags(parse(wbx), 'sheet')[0];
+    const rid = sh ? [...sh.attributes].find((a) => a.localName === 'id' && /relationships/i.test(a.namespaceURI || a.name))?.value || attr(sh, 'id') : null;
+    const relx = await z.get('xl/_rels/workbook.xml.rels');
+    if (rid && relx) {
+      const rel = tags(parse(relx), 'Relationship').find((r) => r.getAttribute('Id') === rid);
+      if (rel) { const t = rel.getAttribute('Target').replace(/\\/g, '/'); path = t.startsWith('/') ? t.slice(1) : 'xl/' + t.replace(/^\.\//, ''); path = path.replace(/[^/]+\/\.\.\//g, ''); }
+    }
+  }
+  if (!path || !(await z.get(path))) {
+    const cand = z.names.filter((n) => /(^|\/)worksheets\/[^/]+\.xml$/i.test(n)).sort();
+    if (!cand.length) throw new Error(wbx ? '시트를 찾지 못했어요. 엑셀에서 "다른 이름으로 저장 → Excel 통합 문서(.xlsx)"로 다시 저장해 올려 주세요.' : '엑셀(.xlsx) 파일이 아니에요');
+    path = cand.find((n) => /sheet1\.xml$/i.test(n)) || cand[0];
+  }
   const shared = [], ss = await z.get('xl/sharedStrings.xml');
-  if (ss) for (const si of parse(ss).getElementsByTagName('si')) {
-    let t = ''; for (const x of si.getElementsByTagName('t')) { const pn = x.parentNode.nodeName; if (pn === 'si' || pn === 'r') t += x.textContent; } shared.push(t);
+  if (ss) for (const si of tags(parse(ss), 'si')) {
+    let t = ''; for (const x of tags(si, 't')) { const pn = x.parentNode.localName; if (pn === 'si' || pn === 'r') t += x.textContent; } shared.push(t);
   }
   const sx = await z.get(path); if (!sx) throw new Error('시트를 읽지 못했어요');
-  const rows = [];
-  for (const row of parse(sx).getElementsByTagName('row')) {
-    const ri = Number(row.getAttribute('r')) - 1, arr = [];
-    for (const c of row.getElementsByTagName('c')) {
-      const m = /^([A-Z]+)/.exec(c.getAttribute('r') || ''); if (!m) continue;
-      let col = 0; for (const ch of m[1]) col = col * 26 + ch.charCodeAt(0) - 64; col--;
-      const t = c.getAttribute('t'), v = c.getElementsByTagName('v')[0];
+  const rows = []; let rAuto = 0;
+  for (const row of tags(parse(sx), 'row')) {
+    const rv = Number(row.getAttribute('r')), ri = Number.isFinite(rv) && rv > 0 ? rv - 1 : rAuto; rAuto = ri + 1;
+    const arr = []; let cAuto = 0;
+    for (const c of tags(row, 'c')) {
+      const m = /^([A-Z]+)/i.exec(c.getAttribute('r') || '');
+      let col = cAuto; if (m) { col = 0; for (const ch of m[1].toUpperCase()) col = col * 26 + ch.charCodeAt(0) - 64; col--; }
+      cAuto = col + 1;
+      const t = c.getAttribute('t'), v = tags(c, 'v')[0];
       let val = '';
       if (t === 's') val = shared[Number(v && v.textContent)] || '';
-      else if (t === 'inlineStr') val = [...c.getElementsByTagName('t')].map((x) => x.textContent).join('');
-      else if (v) val = t === 'str' || t === 'e' ? v.textContent : t === 'b' ? (v.textContent === '1' ? 'TRUE' : 'FALSE') : Number(v.textContent);
+      else if (t === 'inlineStr') val = tags(c, 't').map((x) => x.textContent).join('');
+      else if (v) val = t === 'str' || t === 'e' || t === 'd' ? v.textContent : t === 'b' ? (v.textContent === '1' ? 'TRUE' : 'FALSE') : (isNaN(Number(v.textContent)) ? v.textContent : Number(v.textContent));
       arr[col] = val;
     }
-    rows[Number.isFinite(ri) && ri >= 0 ? ri : rows.length] = Array.from(arr, (x) => (x == null ? '' : x));
+    rows[ri] = Array.from(arr, (x) => (x == null ? '' : x));
   }
   return Array.from(rows, (r) => r || []);
 }
