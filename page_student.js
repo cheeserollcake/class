@@ -81,11 +81,11 @@ async function ensure() {
 }
 /* 교우관계 조사: 'survey:main' = { v:2, rounds:[{id,name,date}] }, 'survey:r:<id>' = { 평가한학생: { 친구: 1~4 } } */
 async function loadSurvey(main) {
-  const sv = { main: { v: 2, rounds: [] }, data: {} };
+  const sv = { main: { v: 2, rounds: [] }, data: {}, nom: {} };
   if (main && main.v === 2) {
     sv.main = main;
-    const keys = main.rounds.map((r) => 'survey:r:' + r.id);
-    if (keys.length) { const kv = await kvGet(keys); main.rounds.forEach((r) => { sv.data[r.id] = kv['survey:r:' + r.id] || {}; }); }
+    const keys = main.rounds.flatMap((r) => ['survey:r:' + r.id, 'survey:n:' + r.id]);
+    if (keys.length) { const kv = await kvGet(keys); main.rounds.forEach((r) => { sv.data[r.id] = kv['survey:r:' + r.id] || {}; sv.nom[r.id] = kv['survey:n:' + r.id] || {}; }); }
   } else if (main && (main.likes || main.dislikes)) {
     // 예전 방식(선호 3명·기피 2명)을 "좋음/싫음"으로 옮기기
     const id = 'old', d = {};
@@ -99,6 +99,12 @@ async function loadSurvey(main) {
 /* 키보드 숫자 = 값: 1 싫음, 2 그저 그럼, 3 친해지고 싶음, 4 좋음 */
 const LEVELS = [[1, '싫음', '#e5484d'], [2, '그저 그럼', '#3b82f6'], [3, '친해지고 싶음', '#eab308'], [4, '좋음', '#22a06b']];
 const LV_SCORE = { 4: 2, 3: 1, 2: 0, 1: -2 };
+/* 상황별 지명: 'survey:n:<id>' = { 지명한학생: { learn:{y:[],n:[]}, perf, lunch, out } } */
+const NOM_CTX = [['learn', '학습과제', '조사·발표·문제풀이를 함께 한다면'], ['perf', '수행과제', '체육·음악·미술 활동을 함께 한다면'], ['lunch', '점심시간', '점심시간에 같이 논다면'], ['out', '학교 밖', '학교 밖에서 만나 놀러 간다면']];
+const NOM_MAX = 3;
+const nomOf = (rid, a) => { const d = (ST.survey.nom[rid] = ST.survey.nom[rid] || {}); return (d[a] = d[a] || {}); };
+const nomList = (m, ctx, pol) => (ctx === 'lead' ? m.lead || [] : ((m[ctx] || {})[pol] || []));
+const nomCount = (m) => NOM_CTX.reduce((t, [c]) => t + nomList(m, c, 'y').length + nomList(m, c, 'n').length, 0);
 
 /* ---------- 사건 성격(긍정/부정) 판단 ---------- */
 const NEG_W = ['다투', '다퉜', '다툼', '싸우', '싸웠', '싸움', '때리', '때렸', '때림', '폭력', '욕을', '욕설', '욕하', '욕했', '놀리', '놀렸', '놀림', '따돌', '왕따', '괴롭', '밀치', '밀쳤', '밀쳐', '밀어서', '때려', '싸워', '다퉈', '놀려', '괴롭혀', '울었', '울음', '울어', '발로 차', '꼬집', '할퀴', '울렸', '울게', '무시', '갈등', '시비', '험담', '뒷담', '빼앗', '뺏', '훔치', '훔쳤', '거짓말', '싫어', '짜증', '화를 내', '화를 냈', '화냄', '화가 나', '소리를 지', '소리 지', '소리질', '위협', '협박', '다쳤', '다치게', '상처', '고자질', '이간', '방해', '비웃', '조롱', '삐졌', '삐짐', '토라', '절교', '외면', '배척', '끼워주지', '안 끼워', '소외', '학폭', '몸싸움', '말다툼', '언쟁', '신경전', '부딪', '탓을', '탓했', '째려', '노려', '침을 뱉', '던졌', '망가뜨', '찢었'];
@@ -396,11 +402,12 @@ async function flushSurvey() {
   const ids = [...savePending]; savePending.clear();
   try {
     await APP.kvSet('survey:main', ST.survey.main);
-    for (const id of ids) if (ST.survey.data[id]) await APP.kvSet('survey:r:' + id, ST.survey.data[id]);
+    for (const id of ids) { if (ST.survey.data[id]) await APP.kvSet('survey:r:' + id, ST.survey.data[id]); if (ST.survey.nom[id] && Object.keys(ST.survey.nom[id]).length) await APP.kvSet('survey:n:' + id, ST.survey.nom[id]); }
   } catch (e) { toast(errMsg(e), true); }
 }
 
 function viewSurvey(redraw) {
+  autoSync(redraw);
   const sv = ST.survey, roster = APP.roster(), rounds = sv.main.rounds;
   const box = h('div', { class: 'card' });
   const addRound = () => {
@@ -430,15 +437,20 @@ function viewSurvey(redraw) {
     h('input', { type: 'date', value: round.date || '', title: '조사한 날짜', onchange: (e) => { round.date = e.target.value; saveSurveyLater(); } }),
     h('button', { class: 'sm', onclick: () => { const n = prompt('조사 이름', round.name); if (n) { round.name = n.trim().slice(0, 30); saveSurveyLater(); redraw(); } } }, '이름 바꾸기'),
     h('button', { class: 'sm', onclick: addRound }, '+ 새 조사'),
+    h('button', { class: 'sm primary', onclick: () => formPanel(round, redraw) }, round.form ? `📱 QR 응답 (${round.form.count || 0}명)` : '📱 QR로 학생 응답 받기'),
     h('button', { class: 'sm ghost', onclick: async () => {
       if (!confirm(`"${round.name}" 조사를 삭제할까요? 입력한 평가가 모두 지워져요.`)) return;
       sv.main.rounds = rounds.filter((r) => r.id !== round.id); delete sv.data[round.id];
-      try { await APP.kvSet('survey:main', sv.main); await APP.kvDel('survey:r:' + round.id); } catch (e) { toast(errMsg(e), true); }
+      delete sv.nom[round.id];
+      try { await APP.kvSet('survey:main', sv.main); await APP.kvDel('survey:r:' + round.id); await APP.kvDel('survey:n:' + round.id); } catch (e) { toast(errMsg(e), true); }
       ST.svRound = null; redraw();
     } }, '조사 삭제'));
 
   const idx = roster.findIndex((x) => x.num === ST.rater), me = roster[idx];
   const go = (d) => { const n = roster[(idx + d + roster.length) % roster.length]; ST.rater = n.num; redraw(); };
+  const modeTabs = h('div', { class: 'tabs', style: 'margin:12px 0 0' }, [['lv', '① 친구에 대한 생각 (4단계)'], ['nom', '② 상황별 함께하고 싶은 친구 (지명)']].map(([k, n]) =>
+    h('button', { class: 'tab' + ((ST.svMode || 'lv') === k ? ' active' : ''), onclick: () => { ST.svMode = k; redraw(); } }, n)));
+  if (ST.svMode === 'nom') { box.append(h('h3', null, '교우관계 조사 입력'), head, modeTabs, nomInput(round, roster, me, idx, go, redraw)); return box; }
   const raterSel = h('select', { onchange: (e) => { ST.rater = Number(e.target.value); redraw(); } },
     roster.map((x) => h('option', { value: x.num, selected: x.num === ST.rater }, `${x.num} ${x.name}  ${done(x.num) >= need ? '✓' : done(x.num) ? `(${done(x.num)}/${need})` : ''}`)));
   const nav = h('div', { class: 'row sv-nav' },
@@ -468,7 +480,7 @@ function viewSurvey(redraw) {
     rowsEl.push(row);
   });
   const cnt = h('span', { class: 'muted' }, `${done(me.num)}/${need}명 평가함`);
-  box.append(h('h3', null, '교우관계 조사 입력'), head,
+  box.append(h('h3', null, '교우관계 조사 입력'), head, modeTabs,
     h('div', { class: 'muted', style: 'margin:10px 0;line-height:1.7' }, '평가한 학생을 고른 뒤, 친구마다 4단계 중 하나를 누르세요. 키보드 숫자(1 싫음 · 2 그저 그럼 · 3 친해지고 싶음 · 4 좋음)로 입력하면 다음 친구로 넘어가요. (↑↓ 이동, 같은 칸을 다시 누르면 지워져요) 자동 저장돼요.'),
     nav,
     h('div', { class: 'row', style: 'justify-content:space-between;margin:10px 0 6px' }, h('b', null, `${me.num}번 ${me.name} 학생의 평가`), cnt,
@@ -480,6 +492,274 @@ function viewSurvey(redraw) {
     h('div', { class: 'sv-list' }, rowsEl));
   setTimeout(() => { const first = rowsEl.find((r, i) => !mine[friends[i].num]) || rowsEl[0]; if (first && document.activeElement === document.body) first.focus({ preventScroll: true }); }, 0);
   return box;
+}
+
+/* ---------- 상황별 지명 입력 (제출확인판처럼 이름 칸을 눌러서) ---------- */
+function nomInput(round, roster, me, idx, go, redraw) {
+  const m = nomOf(round.id, me.num);
+  const get = (c, pol) => ((m[c] = m[c] || { y: [], n: [] })[pol] = m[c][pol] || []);
+  const doneN = (n) => nomCount((ST.survey.nom[round.id] || {})[n] || {});
+  const friends = roster.filter((f) => f.num !== me.num);
+  const paint = (c) => {
+    ['y', 'n'].forEach((pol) => {
+      const arr = get(c, pol), opp = get(c, pol === 'y' ? 'n' : 'y'), box = document.querySelector(`.nm-block[data-k="${c}:${pol}"]`); if (!box) return;
+      box.querySelector('.nm-cnt').textContent = `${arr.length}/${NOM_MAX}`;
+      box.querySelectorAll('.nm-cell').forEach((el) => { const n = Number(el.dataset.n); el.classList.toggle('on', arr.includes(n)); el.classList.toggle('opp', opp.includes(n)); });
+    });
+    const fl = document.querySelector('.nm-filled'); if (fl) fl.textContent = `입력한 학생 ${roster.filter((x) => doneN(x.num)).length}/${roster.length}명`;
+    const sel = document.querySelector('.nm-rater'); if (sel) { const o = [...sel.options].find((x) => Number(x.value) === me.num); if (o) o.textContent = `${me.num} ${me.name}  ${doneN(me.num) ? '✓' : ''}`; }
+  };
+  const toggle = (c, pol, num) => {
+    const arr = get(c, pol), i = arr.indexOf(num);
+    if (i >= 0) arr.splice(i, 1);
+    else {
+      if (arr.length >= NOM_MAX) return toast(`최대 ${NOM_MAX}명까지 고를 수 있어요. 먼저 한 명을 빼 주세요.`, true);
+      const other = get(c, pol === 'y' ? 'n' : 'y'), j = other.indexOf(num); if (j >= 0) other.splice(j, 1);   // 같은 상황의 반대쪽에 있으면 옮김
+      arr.push(num);
+    }
+    saveSurveyLater(round.id); paint(c);
+  };
+  const block = (c, pol) => h('div', { class: 'nm-block ' + (pol === 'y' ? 'pos' : 'neg'), 'data-k': c + ':' + pol },
+    h('div', { class: 'nm-bh' }, h('b', null, pol === 'y' ? '🙂 함께하고 싶은 친구' : '😐 함께하고 싶지 않은 친구'), h('span', { class: 'nm-cnt' }, `${get(c, pol).length}/${NOM_MAX}`)),
+    h('div', { class: 'nm-cells' }, friends.map((f) => h('button', { type: 'button', class: 'nm-cell ' + APP.gcls(f.gender) + (get(c, pol).includes(f.num) ? ' on' : '') + (get(c, pol === 'y' ? 'n' : 'y').includes(f.num) ? ' opp' : ''), 'data-n': f.num, onclick: () => toggle(c, pol, f.num) },
+      h('span', { class: 'nm-no' }, f.num), h('span', { class: 'nm-nm' }, f.name)))));
+  const raterSel = h('select', { class: 'nm-rater', onchange: (e) => { ST.rater = Number(e.target.value); redraw(); } },
+    roster.map((x) => h('option', { value: x.num, selected: x.num === me.num }, `${x.num} ${x.name}  ${doneN(x.num) ? '✓' : ''}`)));
+  const filled = roster.filter((x) => doneN(x.num)).length;
+  return h('div', null,
+    h('div', { class: 'muted', style: 'margin:10px 0;line-height:1.7' }, '상황마다 함께하고 싶은 친구와 함께하고 싶지 않은 친구를 최대 3명씩 이름 칸을 눌러 골라요. 다시 누르면 빠져요. 없으면 비워 두어도 돼요. 자동 저장돼요. "함께하고 싶지 않은 친구"는 선생님만 볼 수 있어요.'),
+    h('div', { class: 'row sv-nav' }, h('button', { class: 'sm', onclick: () => go(-1) }, '◀ 이전 학생'), raterSel, h('button', { class: 'sm', onclick: () => go(1) }, '다음 학생 ▶'),
+      h('span', { class: 'muted nm-filled' }, `입력한 학생 ${filled}/${roster.length}명`)),
+    h('div', { class: 'row', style: 'justify-content:space-between;margin:10px 0 6px' }, h('b', null, `${me.num}번 ${me.name} 학생의 지명`),
+      h('button', { class: 'sm danger', onclick: () => {
+        if (!doneN(me.num)) return toast(`${me.name} 학생은 아직 입력한 지명이 없어요`);
+        if (!confirm(`${me.name} 학생의 지명 기록을 모두 지울까요?`)) return;
+        delete ST.survey.nom[round.id][me.num]; saveSurveyLater(round.id); redraw();
+      } }, '이 학생 지명 삭제')),
+    NOM_CTX.map(([c, n, d]) => h('div', { class: 'nm-sec' }, h('div', { class: 'nm-st' }, h('b', null, n), h('span', { class: 'muted' }, ' · ' + d)),
+      h('div', { class: 'nm-pair' }, block(c, 'y'), block(c, 'n')))),
+    h('div', { class: 'row', style: 'justify-content:flex-end;margin-top:10px' }, h('button', { class: 'primary', onclick: () => { go(1); window.scrollTo({ top: 0 }); } }, '다음 학생 ▶')));
+}
+
+/* ---------- 구글 설문지(QR)로 학생이 직접 응답 ---------- */
+const optLabel = (s2) => `${s2.num} ${s2.name}`;
+const optNum = (v) => { const m2 = String(v || '').match(/^\s*(\d+)/); return m2 ? Number(m2[1]) : null; };
+function formItems(round, opts) {
+  const roster = APP.roster(), names = roster.map(optLabel), items = [];
+  items.push({ key: 'name', kind: 'name', title: '내 이름', desc: '내 번호와 이름을 골라요.', options: names });
+  if (opts.nom) NOM_CTX.forEach(([c, n, d]) => {
+    items.push({ kind: 'page', title: `${n} — ${d}`, desc: '고르고 싶은 친구가 없으면 비워 두어도 돼요. 자기 이름은 고르지 마세요.' });
+    items.push({ key: c + ':y', kind: 'check', title: `${n}: 함께하고 싶은 친구 (최대 3명)`, desc: d, options: names });
+    items.push({ key: c + ':n', kind: 'check', title: `${n}: 함께하고 싶지 않은 친구 (최대 3명)`, desc: '선생님만 볼 수 있어요.', options: names });
+  });
+  if (opts.lv) {
+    items.push({ kind: 'page', title: '친구에 대한 내 생각', desc: '친구마다 가장 가까운 것을 하나씩 골라요. 자기 줄은 비워 두세요.' });
+    items.push({ key: 'lv', kind: 'grid', title: '친구에 대한 내 생각', options: LEVELS.slice().reverse().map(([, n]) => n), rows: names });
+  }
+  return items;
+}
+async function formCreate(round, opts) {
+  const title = `${round.name} — 교우관계 설문`;
+  const r = await api('formCreate', { title, desc: '솔직하게 답해 주세요. 답한 내용은 선생님만 볼 수 있어요.', items: formItems(round, opts) });
+  round.form = { id: r.id, url: r.url, qmap: r.qmap, opts, created: Date.now(), applied: {}, count: 0, closed: false };
+  ST.survey.nom[round.id] = ST.survey.nom[round.id] || {};
+  saveSurveyLater(round.id); await flushSurvey();
+}
+/* 응답 가져오기: 학생마다 가장 최근 응답만, 이미 반영한 응답은 다시 덮어쓰지 않음 */
+async function formSync(round, quiet) {
+  const F = round.form; if (!F) return 0;
+  const j = await api('formResponses', { id: F.id });
+  const resp = (j.responses || []).slice().sort((a, b) => String(a.lastSubmittedTime).localeCompare(String(b.lastSubmittedTime)));
+  const valsOf = (r, qid) => (((r.answers || {})[qid] || {}).textAnswers || {}).answers || [];
+  const latest = new Map(), roster = APP.roster(), ok = new Set(roster.map((x) => x.num));
+  resp.forEach((r) => { const v = valsOf(r, F.qmap.name)[0]; const n = v && optNum(v.value); if (n != null && ok.has(n)) latest.set(n, r); });
+  F.count = latest.size; F.lastSync = Date.now();
+  let applied = 0, over = 0;
+  const lvByName = Object.fromEntries(LEVELS.map(([v, n]) => [n, v]));
+  latest.forEach((r, me) => {
+    const t = String(r.lastSubmittedTime || '');
+    if (F.applied[me] && F.applied[me] >= t) return;
+    if (F.opts.nom) {
+      const m = {};
+      NOM_CTX.forEach(([c]) => { m[c] = { y: [], n: [] }; ['y', 'n'].forEach((pol) => {
+        const qid = F.qmap[c + ':' + pol]; if (!qid) return;
+        let list = valsOf(r, qid).map((x) => optNum(x.value)).filter((x) => x != null && x !== me && ok.has(x));
+        if (list.length > NOM_MAX) { over++; list = list.slice(0, NOM_MAX); }
+        m[c][pol] = list;
+      }); m[c].n = m[c].n.filter((x) => !m[c].y.includes(x)); });
+      (ST.survey.nom[round.id] = ST.survey.nom[round.id] || {})[me] = m;
+    }
+    if (F.opts.lv && F.qmap.lv) {
+      const d = (ST.survey.data[round.id] = ST.survey.data[round.id] || {}), mine = (d[me] = d[me] || {});
+      Object.entries(F.qmap.lv).forEach(([qid, label]) => { const f = optNum(label); const v = valsOf(r, qid)[0]; if (f == null || f === me || !v) return; const lv = lvByName[v.value]; if (lv) mine[f] = lv; });
+    }
+    F.applied[me] = t; applied++;
+  });
+  saveSurveyLater(round.id);
+  if (!quiet || applied) toast(applied ? `새 응답 ${applied}명을 반영했어요${over ? ` (3명보다 많이 고른 ${over}곳은 앞의 3명만)` : ''}` : '새 응답이 없어요');
+  return applied;
+}
+/* 화면을 열 때 1분에 한 번씩 자동으로 응답 가져오기 */
+let lastAuto = 0;
+function autoSync(redraw) {
+  if (APP.DEMO || !ST.survey) return;
+  if (Date.now() - lastAuto < 60000) return;
+  lastAuto = Date.now();
+  const rs = ST.survey.main.rounds.filter((r) => r.form && !r.form.closed);
+  if (!rs.length) return;
+  (async () => { let n = 0; for (const r of rs) { try { n += await formSync(r, true); } catch (e) { /* 다음에 */ } } if (n) redraw(); })();
+}
+let qrLib = null;
+function loadQR() {
+  if (window.qrcode) return Promise.resolve(window.qrcode);
+  if (!qrLib) qrLib = new Promise((res, rej) => { const sc = document.createElement('script'); sc.src = 'https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js'; sc.onload = () => (window.qrcode ? res(window.qrcode) : rej(new Error('QR'))); sc.onerror = () => { qrLib = null; rej(new Error('QR')); }; document.head.append(sc); });
+  return qrLib;
+}
+function qrCanvas(url, size) {
+  const cv = h('canvas', { class: 'qr-cv', width: size, height: size });
+  loadQR().then((qrcode) => {
+    const q = qrcode(0, 'M'); q.addData(url); q.make();
+    const n = q.getModuleCount(), m2 = 4, cell = size / (n + m2 * 2), cx = cv.getContext('2d');
+    cx.fillStyle = '#fff'; cx.fillRect(0, 0, size, size); cx.fillStyle = '#111';
+    for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) if (q.isDark(r, c)) cx.fillRect(Math.floor((c + m2) * cell), Math.floor((r + m2) * cell), Math.ceil(cell), Math.ceil(cell));
+  }).catch(() => { const cx = cv.getContext('2d'); cx.fillStyle = '#f3f4f6'; cx.fillRect(0, 0, size, size); cx.fillStyle = '#6b7280'; cx.font = '14px sans-serif'; cx.fillText('QR을 그리지 못했어요', 12, size / 2); });
+  return cv;
+}
+function showBigQR(url, title) {
+  const ov = h('div', { class: 'qr-full', onclick: () => ov.remove() }, h('div', { class: 'qr-full-t' }, title), qrCanvas(url, Math.min(innerWidth, innerHeight) * 0.7 | 0), h('div', { class: 'qr-full-u' }, url), h('div', { class: 'muted' }, '화면을 누르면 닫혀요'));
+  document.body.append(ov);
+}
+function formPanel(round, redraw) {
+  const roster = APP.roster(), F = round.form;
+  const body = h('div');
+  const close = () => { ov.remove(); redraw(); };
+  const ov = h('div', { class: 'overlay' }, h('div', { class: 'modal qr-modal' }, h('div', { class: 'row', style: 'justify-content:space-between;margin-bottom:8px' }, h('h3', { style: 'margin:0' }, `📱 QR로 학생 응답 받기 · ${round.name}`), h('button', { onclick: close }, '닫기')), body));
+  const draw = () => {
+    const F2 = round.form;
+    if (APP.DEMO) return body.replaceChildren(h('div', { class: 'banner warn' }, '데모 모드에서는 설문지를 만들 수 없어요. 구글로 로그인해서 써 주세요.'));
+    if (!F2) {
+      const opt = { nom: true, lv: false };
+      body.replaceChildren(
+        h('div', { class: 'muted', style: 'line-height:1.7;margin-bottom:10px' }, '선생님 구글 드라이브에 구글 설문지를 만들고 QR을 보여 줘요. 학생이 휴대폰·태블릿으로 응답하면 이 사이트에 자동으로 들어와요. (이 화면이나 관계도를 열어 두면 1분마다 가져와요)'),
+        h('label', { class: 'row', style: 'gap:6px;margin-bottom:6px' }, h('input', { type: 'checkbox', checked: true, onchange: (e) => { opt.nom = e.target.checked; } }), '상황별 함께하고 싶은 / 함께하고 싶지 않은 친구 (최대 3명씩)'),
+        h('label', { class: 'row', style: 'gap:6px;margin-bottom:12px' }, h('input', { type: 'checkbox', onchange: (e) => { opt.lv = e.target.checked; } }), `친구에 대한 생각 4단계 (친구 ${roster.length - 1}명을 모두 평가해서 길어요)`),
+        h('div', { class: 'row', style: 'justify-content:flex-end' }, h('button', { class: 'primary', onclick: async (e) => {
+          if (!opt.nom && !opt.lv) return toast('하나 이상 골라 주세요', true);
+          e.target.disabled = true; e.target.textContent = '만드는 중…';
+          try { await formCreate(round, opt); toast('설문지를 만들었어요'); draw(); }
+          catch (er) { e.target.disabled = false; e.target.textContent = '설문지 만들기'; toast(er.message === 'FORMSOFF' ? '구글 클라우드에서 "Google Forms API"를 사용 설정해 주세요. (설정방법.md 참고)' : errMsg(er), true); }
+        } }, '설문지 만들기')));
+      return;
+    }
+    const st = h('div', { class: 'muted' }, `응답한 학생 ${F2.count || 0}/${roster.length}명` + (F2.lastSync ? ` · ${new Date(F2.lastSync).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })}에 확인` : ''));
+    body.replaceChildren(
+      h('div', { class: 'qr-wrap' }, qrCanvas(F2.url, 240),
+        h('div', { class: 'qr-side' },
+          F2.closed ? h('div', { class: 'banner warn', style: 'margin:0 0 8px' }, '응답을 마감했어요.') : null,
+          h('div', { class: 'qr-url' }, F2.url),
+          h('div', { class: 'row', style: 'gap:6px;flex-wrap:wrap;margin:8px 0' },
+            h('button', { class: 'sm primary', onclick: () => showBigQR(F2.url, `${round.name} 교우관계 설문`) }, '크게 보기'),
+            h('button', { class: 'sm', onclick: () => { navigator.clipboard && navigator.clipboard.writeText(F2.url).then(() => toast('링크를 복사했어요')); } }, '링크 복사'),
+            h('button', { class: 'sm', onclick: async (e) => { e.target.disabled = true; try { await formSync(round); draw(); } catch (er) { toast(errMsg(er), true); } e.target.disabled = false; } }, '응답 지금 가져오기')),
+          st,
+          h('div', { class: 'row', style: 'gap:6px;flex-wrap:wrap;margin-top:12px' },
+            h('button', { class: 'sm', onclick: async () => {
+              const want = !F2.closed;
+              if (want && !confirm('응답을 마감할까요? 학생들이 더 이상 응답할 수 없어요.')) return;
+              try { await api('formClose', { id: F2.id, open: !want }); if (want) { try { await formSync(round, true); } catch (e2) { /* 무시 */ } } F2.closed = want; saveSurveyLater(round.id); draw(); toast(want ? '응답을 마감했어요' : '다시 응답을 받아요'); } catch (er) { toast(errMsg(er), true); }
+            } }, F2.closed ? '다시 응답 받기' : '응답 마감'),
+            h('a', { class: 'sm-link', href: `https://docs.google.com/forms/d/${F2.id}/edit`, target: '_blank', rel: 'noopener' }, '구글 설문지에서 열기'),
+            h('button', { class: 'sm ghost', onclick: () => { if (!confirm('이 조사와 설문지의 연결을 끊을까요? (이미 들어온 응답은 그대로 남아요. 새 설문지를 다시 만들 수 있어요)')) return; delete round.form; saveSurveyLater(round.id); draw(); } }, '연결 끊기')))),
+      h('div', { class: 'muted', style: 'margin-top:10px;line-height:1.6' }, '같은 학생이 여러 번 응답하면 마지막 응답만 반영돼요. 학생이 응답한 뒤 선생님이 직접 고친 내용은, 그 학생이 다시 응답하지 않는 한 그대로 남아요.'));
+  };
+  draw(); document.body.append(ov);
+}
+
+/* ---------- 상황별 지명 분석 ---------- */
+function computeNom() {
+  const rounds = ST.survey.main.rounds, roster = APP.roster(), ids = roster.map((s) => s.num), idset = new Set(ids);
+  const has = (r) => Object.values(ST.survey.nom[r.id] || {}).some((m) => nomCount(m));
+  const round = ST.round === 'all' ? rounds.slice().reverse().find(has) : rounds.find((r) => r.id === ST.round && has(r));
+  if (!round) return null;
+  const D = ST.survey.nom[round.id];
+  const raters = ids.filter((a) => D[a] && nomCount(D[a]));
+  const z0 = () => ({ y: [], n: [] });
+  const st = {};
+  ids.forEach((b) => { st[b] = { learn: z0(), perf: z0(), lunch: z0(), out: z0(), lead: [] }; });
+  raters.forEach((a) => { const m = D[a];
+    NOM_CTX.forEach(([c]) => ['y', 'n'].forEach((pol) => nomList(m, c, pol).forEach((b) => { if (idset.has(b) && b !== a) st[b][c][pol].push(a); })));
+  });
+  const picks = (a, c, pol) => (D[a] ? nomList(D[a], c, pol) : []);
+  const intim = (a, b) => picks(a, 'lunch', 'y').includes(b) || picks(a, 'out', 'y').includes(b);
+  // 서로 고른 친구(점심·학교 밖)
+  ids.forEach((b) => { st[b].friends = ids.filter((x) => x !== b && intim(b, x) && intim(x, b)); st[b].oneway = ids.filter((x) => x !== b && intim(b, x) && !intim(x, b)); });
+  // 친한 무리 = 서로 고른 관계로 이어진 학생들
+  const groups = [], seen = new Set();
+  ids.forEach((b) => { if (seen.has(b) || !st[b].friends.length) return; const g = [], q = [b]; seen.add(b);
+    while (q.length) { const x = q.shift(); g.push(x); st[x].friends.forEach((y) => { if (!seen.has(y)) { seen.add(y); q.push(y); } }); }
+    groups.push(g.sort((p, q2) => p - q2)); });
+  groups.sort((a, b) => b.length - a.length);
+  groups.forEach((g, i) => g.forEach((x) => { st[x].group = i; }));
+  // 유형 (사회측정 분류): 선호 = 좋다 − 싫다, 영향 = 좋다 + 싫다 (모두 학급 안에서 표준점수로)
+  const P = (b) => NOM_CTX.reduce((t, [c]) => t + st[b][c].y.length, 0), N = (b) => NOM_CTX.reduce((t, [c]) => t + st[b][c].n.length, 0);
+  const zs = (f) => { const v = ids.map(f), m = v.reduce((a, b) => a + b, 0) / v.length, sd = Math.sqrt(v.reduce((a, b) => a + (b - m) ** 2, 0) / v.length) || 1; return Object.fromEntries(ids.map((b, i) => [b, (v[i] - m) / sd])); };
+  const zP = zs(P), zN = zs(N), pref0 = zs((b) => zP[b] - zN[b]), imp0 = zs((b) => zP[b] + zN[b]);
+  const mean = (f) => ids.reduce((t, b) => t + f(b), 0) / ids.length, sdv = (f) => { const m = mean(f); return Math.sqrt(ids.reduce((t, b) => t + (f(b) - m) ** 2, 0) / ids.length); };
+  const enough = raters.length >= Math.ceil(ids.length / 2);
+  const hi = (f, min) => { const m = mean(f), sd = sdv(f); return (b) => f(b) >= Math.max(min, m + Math.max(sd, 1)); };
+  const learnHi = hi((b) => st[b].learn.y.length, 3), perfHi = hi((b) => st[b].perf.y.length, 3);
+  const negHi = hi((b) => N(b), 3);
+  ids.forEach((b) => { const x = st[b];
+    x.P = P(b); x.N = N(b);
+    x.type = !enough ? '' : pref0[b] > 1 && zP[b] > 0 && zN[b] < 0 ? '인기형' : pref0[b] < -1 && zN[b] > 0 && zP[b] < 0 ? '거부형' : imp0[b] < -1 && zP[b] < 0 && zN[b] < 0 ? '무시형' : imp0[b] > 1 && zP[b] > 0 && zN[b] > 0 ? '양면형' : '보통';
+    const tags = [], flags = [];
+    if (learnHi(b)) tags.push(`학습에서 신뢰 ${x.learn.y.length}명`);
+    if (perfHi(b)) tags.push(`활동에서 인정 ${x.perf.y.length}명`);
+    if (enough) {
+      const playY = x.lunch.y.length + x.out.y.length, negCtx = NOM_CTX.filter(([c]) => x[c].n.length >= 2).length;
+      if (!x.friends.length && playY === 0) flags.push('놀이 친구로 지목받지 못함');
+      else if (!x.friends.length && x.oneway.length) flags.push('서로 고른 놀이 친구 없음');
+      if (negCtx >= 2) flags.push('싫다는 지명이 여러 상황에서 반복');
+      if ((learnHi(b) || perfHi(b)) && negHi(b)) flags.push('능력은 인정받지만 협동 중 갈등 가능성 (관찰 필요)');
+      if ((x.learn.n.length >= 3 || x.perf.n.length >= 3) && playY >= 2) flags.push('놀이에선 어울리지만 과제 협동은 꺼려짐');
+    }
+    x.tags = tags; x.flags = flags;
+    const fr = x.friends.length ? '놀이 친구: ' + x.friends.map(stuName).join('·') : '';
+    x.summary = [fr, ...tags].filter(Boolean).join(' / ');
+  });
+  return { round, raters, st, groups, enough, D };
+}
+/* 지명 관계를 관계도 선에 반영할 점수 (a→b): 점심·학교 밖은 크게, 과제는 작게, 싫다는 지명은 빼기 */
+function nomDirScore(N, a, b) {
+  if (!N || !N.D[a]) return null;
+  const m = N.D[a]; let v = 0, any = false;
+  [['learn', 0.5], ['perf', 0.5], ['lunch', 1], ['out', 1.5]].forEach(([c, w]) => { if (nomList(m, c, 'y').includes(b)) { v += w; any = true; } if (nomList(m, c, 'n').includes(b)) { v -= 1.2; any = true; } });
+  return any ? v : 0;
+}
+
+function nomSection(N, redraw) {
+  const roster = APP.roster(), GC = ['#dbeafe', '#dcfce7', '#fef3c7', '#fce7f3', '#ede9fe', '#ffedd5', '#ccfbf1', '#e0e7ff', '#fae8ff', '#ecfccb'];
+  const fold = (key, title, ...body) => h('details', { class: 'card fold', open: ST.open[key] ? '' : null, ontoggle: (e) => { ST.open[key] = e.target.open; } }, h('summary', null, h('h3', null, title)), ...body);
+  const pick = (n) => () => { ST.sel = n; redraw(); window.scrollTo({ top: 0, behavior: 'smooth' }); };
+  const watch = roster.filter((s) => N.st[s.num].flags.length || ['거부형', '무시형'].includes(N.st[s.num].type));
+  const lone = roster.filter((s) => N.st[s.num].group == null);
+  const cell = (x, c) => { const y = x[c].y.length, n = x[c].n.length; return h('td', null, y ? h('b', { class: 'nm-y' }, '+' + y) : '', y && n ? ' ' : '', n ? h('b', { class: 'nm-n' }, '−' + n) : '', !y && !n ? h('span', { class: 'muted' }, '-') : ''); };
+  return fold('nom', `상황별 지명 분석 (${N.round.name} · 입력 ${N.raters.length}/${roster.length}명)`,
+    N.enough ? null : h('div', { class: 'banner warn' }, '지명을 입력한 학생이 절반이 안 돼서 유형과 살펴볼 점은 표시하지 않아요.'),
+    h('h4', { class: 'nm-h' }, '친한 무리', h('span', { class: 'muted' }, ' (점심시간·학교 밖에서 서로 고른 친구끼리 이어진 학생들)')),
+    N.groups.length ? h('div', { class: 'nm-groups' }, N.groups.map((g, i) => h('div', { class: 'nm-group', style: `background:${GC[i % GC.length]}` },
+      h('b', null, `무리 ${i + 1}`), h('span', null, g.map((x) => h('button', { class: 'nm-gname ' + APP.gcls((stuOf(x) || {}).gender), onclick: pick(x) }, stuName(x))))))) : h('div', { class: 'muted' }, '서로 고른 친구가 아직 없어요.'),
+    lone.length ? h('div', { class: 'muted', style: 'margin-top:6px' }, `무리에 들지 않은 학생: ${lone.map((s) => s.name).join(', ')}`) : null,
+    N.enough && watch.length ? [h('h4', { class: 'nm-h' }, '살펴볼 학생'), h('ul', { class: 'rel-list' }, watch.map((s) => { const x = N.st[s.num];
+      return h('li', null, h('a', { href: '#', onclick: (e) => { e.preventDefault(); pick(s.num)(); } }, s.name), ' — ', [['거부형', '무시형'].includes(x.type) ? x.type : null, ...x.flags].filter(Boolean).join(', ')); }))] : null,
+    h('h4', { class: 'nm-h' }, '학생별 결과'),
+    h('div', { class: 'table-wrap' }, h('table', { class: 'roster survey nm-tbl' },
+      h('thead', null, h('tr', null, ['학생', '유형', '학습', '수행', '점심', '학교 밖', '한 줄 요약'].map((t) => h('th', null, t)))),
+      h('tbody', null, roster.map((s) => { const x = N.st[s.num];
+        return h('tr', { class: APP.gcls(s.gender), style: 'cursor:pointer', onclick: pick(s.num) }, h('td', null, `${s.num} ${s.name}`),
+          h('td', null, x.type ? h('span', { class: 'nm-type t-' + x.type }, x.type) : '-'), cell(x, 'learn'), cell(x, 'perf'), cell(x, 'lunch'), cell(x, 'out'),
+          h('td', { style: 'text-align:left' }, x.summary || h('span', { class: 'muted' }, '-'), x.flags.length ? h('div', { class: 'nm-flagline' }, x.flags.join(', ')) : null)); })))),
+    h('div', { class: 'muted', style: 'margin-top:6px;line-height:1.6' }, '+는 함께하고 싶다는 지명, −는 함께하고 싶지 않다는 지명을 받은 수예요. "전체 조사"를 고르면 가장 최근에 지명을 입력한 조사로 보여 줘요. 싫다는 지명 결과는 학생에게 보여 주지 마세요.'));
 }
 
 /* 힘 기반 배치 (Fruchterman–Reingold) */
@@ -560,6 +840,7 @@ function computeRel() {
   // 조사 점수 s(a→b): 고른 조사, 또는 전체(최근 조사일수록 비중 큼)
   const chosen = ST.round === 'all' ? rounds.map((r, i) => ({ r, w: Math.pow(0.6, rounds.length - 1 - i) })) : rounds.filter((r) => r.id === ST.round).map((r) => ({ r, w: 1 }));
   const sDir = new Map(); // 'a>b' → 점수(-2~2)
+  let rater = null;   // 학생별 [준 점수 평균, 흩어짐]
   const lastLv = new Map(); // 'a>b' → 가장 최근 단계
   if (useS) {
     const acc = new Map();
@@ -568,6 +849,15 @@ function computeRel() {
       const k = a + '>' + b, o = acc.get(k) || [0, 0]; o[0] += LV_SCORE[v] * w; o[1] += w; acc.set(k, o); lastLv.set(k, v);
     })); });
     acc.forEach(([sum, w], k) => sDir.set(k, sum / w));
+    // 학생마다 점수를 주는 습관이 달라서(후하게/짜게) → 그 학생의 평균·흩어짐에 맞춰 보정한 값과 원래 값을 반씩
+    const raw = [...sDir.values()];
+    if (raw.length > 5) {
+      const M = raw.reduce((a, b) => a + b, 0) / raw.length, SD = Math.sqrt(raw.reduce((a, b) => a + (b - M) ** 2, 0) / raw.length) || 1;
+      const by = new Map(); sDir.forEach((v, k) => { const a = k.split('>')[0]; (by.get(a) || by.set(a, []).get(a)).push(v); });
+      const ms = new Map(); by.forEach((v, a) => { const m = v.reduce((x, y) => x + y, 0) / v.length; ms.set(a, [m, Math.max(0.6, Math.sqrt(v.reduce((x, y) => x + (y - m) ** 2, 0) / v.length))]); });
+      sDir.forEach((v, k) => { const [m, sd] = ms.get(k.split('>')[0]); const adj = M + ((v - m) / sd) * SD; sDir.set(k, Math.max(-2, Math.min(2, 0.5 * v + 0.5 * adj))); });
+      rater = ms;
+    }
   }
   // 누가기록 점수 L(a,b)
   const L = new Map(), pos = {}, neg = {}, pairPN = new Map();
@@ -580,16 +870,22 @@ function computeRel() {
     });
   });
   const key = (a, b) => (a < b ? a + '-' + b : b + '-' + a);
+  const NM = useS ? computeNom() : null;
   const rel = (a, b) => {
     const s1 = sDir.get(a + '>' + b), s2 = sDir.get(b + '>' + a);
-    const sv = s1 == null && s2 == null ? null : ((s1 ?? s2) + (s2 ?? s1)) / 2;
+    let sv = s1 == null && s2 == null ? null : ((s1 ?? s2) + (s2 ?? s1)) / 2;
+    if (sv != null && s1 != null && s2 != null && s1 >= 1.5 && s2 >= 1.5) sv = Math.min(2, sv + 0.3);   // 서로 좋음이면 더 무겁게
     const lv = L.has(key(a, b)) ? 2 * Math.tanh(L.get(key(a, b)) / 1.5) : null;
-    if (sv != null && lv != null) return 0.6 * sv + 0.4 * lv;
-    return sv != null ? sv : lv;
+    let nv = null;
+    if (NM) { const d1 = nomDirScore(NM, a, b), d2 = nomDirScore(NM, b, a); if (d1 != null || d2 != null) { const t = (d1 || 0) + (d2 || 0) + ((d1 || 0) >= 1 && (d2 || 0) >= 1 ? 1 : 0); nv = t ? 2 * Math.tanh(t / 2.5) : null; } }
+    const parts = [[sv, 0.45], [nv, 0.35], [lv, 0.3]].filter(([v]) => v != null);
+    if (!parts.length) return null;
+    const W = parts.reduce((t, [, w]) => t + w, 0);
+    return parts.reduce((t, [v, w]) => t + v * w, 0) / W;
   };
   const edges = [];
   for (let i = 0; i < ids.length; i++) for (let j = i + 1; j < ids.length; j++) { const r = rel(ids[i], ids[j]); if (r != null && r !== 0) edges.push({ a: ids[i], b: ids[j], r }); }
-  return { ids, sDir, lastLv, L, pairPN, pos, neg, edges, rel, useS, useL, chosen };
+  return { ids, sDir, lastLv, L, pairPN, pos, neg, edges, rel, useS, useL, chosen, NM, rater };
 }
 
 /* 학급 전체 분석 */
@@ -641,6 +937,12 @@ function classReport(R, st, ids, hasSurvey) {
   if (noClose.length) crisis.push(li(`가까운 관계가 드러나지 않은 학생: ${noClose.map(nm).join(', ')}`));
   if (!hasSurvey && R.useS) crisis.push(li('교우관계 조사를 학급의 절반 이상 입력하면 더 정확하게 분석할 수 있어요.'));
   sec('위기 관계', crisis.length ? h('ul', { class: 'rel-list' }, crisis) : h('div', { class: 'muted' }, '뚜렷한 위기 신호가 보이지 않아요.'));
+  // 상황별 지명
+  if (R.NM && R.NM.enough) {
+    const T = {}; ids.forEach((n) => { const t = R.NM.st[n].type; if (t && t !== '보통') (T[t] = T[t] || []).push(nm(n)); });
+    sec('상황별 지명', h('ul', { class: 'rel-list' }, li(`친한 무리 ${R.NM.groups.length}개 (${R.NM.groups.map((g) => g.length + '명').join(', ') || '-'})`),
+      ...['인기형', '양면형', '거부형', '무시형'].map((t) => (T[t] ? li(`${t}: ${T[t].join(', ')}`, t === '거부형' || t === '무시형' ? 'warn' : '') : null))));
+  }
   // 4. 관계의 중심
   const centers = ids.filter((n) => st[n].center);
   if (centers.length) sec('관계의 중심', h('ul', { class: 'rel-list' }, ['학급 관계의 중심', '여학생 관계의 중심', '남학생 관계의 중심'].map((c) => { const a = centers.filter((n) => st[n].center === c); return a.length ? li(`${c}: ${a.map(nm).join(', ')}`) : null; })),
@@ -656,6 +958,7 @@ function classReport(R, st, ids, hasSurvey) {
 }
 
 function viewSociogram(redraw) {
+  autoSync(redraw);
   const roster = APP.roster(), W = 920, H = 600;
   const R = computeRel(), ids = R.ids;
   const thr = ST.thr;
@@ -796,6 +1099,16 @@ function viewSociogram(redraw) {
       st[sel].sl != null ? h('div', { class: 'muted', style: 'margin-top:2px' }, `친구들에게 받은 평가 평균의 변화: ${trendWord(st[sel].sl)}`) : null,
       ), evs.length ? fold('ev', `관련 사건 ${evs.length}건`, evs.map((l) => logItem(l, '', redraw, false))) : null);
   }
+  const nomCard = R.NM ? nomSection(R.NM, redraw) : null;
+  if (detail && R.NM) {
+    const x = R.NM.st[sel], cnt = (c, pol) => x[c][pol];
+    detail.prepend(h('div', { class: 'card' }, h('h3', null, `${stuName(sel)} · 상황별 지명 (${R.NM.round.name})`),
+      h('div', { class: 'row', style: 'gap:6px;flex-wrap:wrap;margin-bottom:8px' }, x.type ? h('span', { class: 'nm-type t-' + x.type }, x.type) : null, ...x.tags.map((t) => h('span', { class: 'chip-s' }, t)), ...x.flags.map((t) => h('span', { class: 'nm-flag' }, t))),
+      h('div', { class: 'table-wrap' }, h('table', { class: 'roster survey nm-tbl' },
+        h('thead', null, h('tr', null, ['상황', '이 학생과 함께하고 싶다는 친구', '이 학생과 함께하고 싶지 않다는 친구'].map((t) => h('th', null, t)))),
+        h('tbody', null, NOM_CTX.map(([c, n]) => h('tr', null, h('td', null, n), h('td', { style: 'text-align:left' }, cnt(c, 'y').map(stuName).join(', ') || '-'), h('td', { style: 'text-align:left' }, cnt(c, 'n').map(stuName).join(', ') || '-')))))),
+      h('div', { class: 'muted', style: 'margin-top:6px' }, x.friends.length ? `점심·학교 밖에서 서로 고른 친구: ${x.friends.map(stuName).join(', ')}` : '점심·학교 밖에서 서로 고른 친구가 없어요.')));
+  }
   const helpBtn = h('button', { class: 'sm', onclick: () => modal('관계도 보는 방법',
     h('ul', { class: 'rel-list' },
       h('li', null, '동그라미 하나가 학생 한 명이에요. 파랑은 남학생, 분홍은 여학생이에요.'),
@@ -804,10 +1117,13 @@ function viewSociogram(redraw) {
       h('li', null, h('b', { style: 'color:#f59e0b' }, '주황 테두리'), '는 "살펴볼 점"이 있는 학생이에요.'),
       h('li', null, '교우관계 조사는 좋음 +2, 친해지고 싶음 +1, 그저 그럼 0, 싫음 −2로 바꿔 계산해요. 조사가 여러 번이면 최근 조사를 더 무겁게 봐요.'),
       h('li', null, '누가기록은 같이 나온 횟수가 아니라 사건의 성격(긍정·부정)으로 반영해요.'),
+      h('li', null, '학생마다 점수를 주는 습관(후하게·짜게)이 달라서, 그 학생이 준 점수의 평균과 흩어짐에 맞춰 보정해요. 모두에게 "좋음"을 준 학생의 "좋음"은 가볍게, 아껴서 준 "좋음"은 무겁게 반영돼요. 서로 "좋음"이면 더 가깝게 봐요.'),
+      h('li', null, '상황별 지명이 있으면 점심시간·학교 밖 지명을 가장 무겁게, 학습·수행과제 지명은 가볍게 관계선에 반영해요. 서로 고르면 더 가깝게 봐요.'),
+      h('li', null, '지명 유형 — 인기형: 함께하고 싶다는 지명이 많고 싫다는 지명은 적음 / 거부형: 싫다는 지명이 많고 좋다는 지명은 적음 / 무시형: 어느 쪽도 거의 지명받지 않음 / 양면형: 둘 다 많음 / 보통. 모두 학급 안에서 비교한 값이에요.'),
       h('li', null, '"관계의 중심"은 ① "좋음"을 4명 이상, 학급 평균보다 눈에 띄게 많이 받고 ② 서로 "좋음"인 친구가 2명 이상이며 ③ 남학생(또는 여학생)의 절반 이상에게 "좋음"을 받은 학생이에요. 둘 다 절반 이상이면 학급 관계의 중심이에요.'),
       h('li', null, '학생을 누르면 친구별 평가와 회차별 변화(괄호 안 꺾은선 화살표)를 볼 수 있어요.'),
       h('li', null, '모든 분석은 참고용이에요. 학생을 직접 관찰한 선생님의 판단이 가장 정확해요.'))) }, '관계도 보는 방법');
   const classBtn = h('button', { class: 'sm primary', onclick: () => classReport(R, st, ids, hasSurvey) }, '학급 전체 분석');
-  return h('div', null, controls, h('div', { class: 'card' }, svg, h('div', { class: 'row', style: 'gap:8px;margin-top:8px' }, helpBtn, classBtn)), detail, table);
+  return h('div', null, controls, h('div', { class: 'card' }, svg, h('div', { class: 'row', style: 'gap:8px;margin-top:8px' }, helpBtn, classBtn)), detail, nomCard, table);
 }
 })();

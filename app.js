@@ -44,6 +44,7 @@ const ERR = {
   PW: '비밀번호가 맞지 않습니다.',
   LOCKED: '비밀번호를 여러 번 틀려서 잠시 잠겼습니다.',
   SHORT: '비밀번호는 6자 이상이어야 합니다.',
+  FORMSOFF: '구글 클라우드에서 "Google Forms API"를 사용 설정해 주세요. (설정방법.md 참고)',
   WEAK: '너무 쉬운 비밀번호예요. (같은 글자 반복, 123456 같은 것은 안 돼요)',
   BAD: '저장할 수 없는 데이터입니다.'
 };
@@ -390,6 +391,10 @@ async function collectBackup(sel) {
       const vals = await APP.kvGet(main.rounds.map((r) => 'survey:r:' + r.id));
       main.rounds.forEach((r) => { const d = vals['survey:r:' + r.id] || {};
         out.push({ name: `교우관계_${r.name}`, rows: [[`${r.name} ${r.date || ''}`.trim() + ' (행: 평가한 학생, 열: 친구)', ...R.map((x) => x.name)], ...R.map((a) => [a.name, ...R.map((b) => (a.num === b.num ? '-' : LV[(d[a.num] || {})[b.num]] || ''))])] }); });
+      const nv = await APP.kvGet(main.rounds.map((r) => 'survey:n:' + r.id)), CT = [['learn', '학습'], ['perf', '수행'], ['lunch', '점심'], ['out', '학교 밖']];
+      main.rounds.forEach((r) => { const d = nv['survey:n:' + r.id]; if (!d || !Object.keys(d).length) return;
+        const L = (m, c, p) => ((c === 'lead' ? m.lead : (m[c] || {})[p]) || []).map((n) => nmOf(n)).join(', ');
+        out.push({ name: `지명_${r.name}`, rows: [['학생', ...CT.flatMap(([, n]) => [n + ' 함께', n + ' 싫음'])], ...R.map((a) => { const m = d[a.num] || {}; return [a.name, ...CT.flatMap(([c]) => [L(m, c, 'y'), L(m, c, 'n')])]; })] }); });
     } else if (main && (main.likes || main.dislikes)) {
       out.push({ name: '교우관계_예전 조사', rows: [['학생', '함께하고 싶은 친구', '어려운 친구'], ...R.map((a) => [a.name, ((main.likes || {})[a.num] || []).filter(Boolean).map((n) => nmOf(n)).join(', '), ((main.dislikes || {})[a.num] || []).filter(Boolean).map((n) => nmOf(n)).join(', ')])] });
     }

@@ -144,6 +144,43 @@ const replaceAll = (k, data) => enqueue(async () => {
 const setting = (key) => { const r = rows.settings.find((x) => x[0] === key); return r ? r[1] : null; };
 const setSetting = (key, value) => upsert('settings', 0, [key, String(value)]);
 
+/* ---------------- 구글 설문지 (교우관계 조사를 학생이 직접 응답) ----------------
+   drive.file 권한으로 이 앱이 만든 설문지만 다룸. 구글 클라우드에서 "Google Forms API"를 켜야 함 */
+const FORMS = 'https://forms.googleapis.com/v1/forms';
+async function formsCall(fn) { try { return await fn(); } catch (e) { if (e.message === 'APIOFF') throw new Error('FORMSOFF'); throw e; } }
+async function formPublish(id, open) {
+  return gj(`${FORMS}/${encodeURIComponent(id)}:setPublishSettings`, jsonOpt('POST', { publishSettings: { publishState: { isPublished: true, isAcceptingResponses: open } }, updateMask: 'publishState' }));
+}
+async function formCreate(title, desc, items) {
+  const f = await gj(FORMS, jsonOpt('POST', { info: { title: String(title).slice(0, 200), documentTitle: String(title).slice(0, 200) } }));
+  const opt = (arr) => arr.map((v) => ({ value: String(v) }));
+  const reqs = [{ updateFormInfo: { info: { description: String(desc || '') }, updateMask: 'description' } }];
+  items.forEach((it, i) => {
+    let item;
+    if (it.kind === 'page') item = { title: it.title, description: it.desc || '', pageBreakItem: {} };
+    else if (it.kind === 'grid') item = { title: it.title, description: it.desc || '', questionGroupItem: { grid: { columns: { type: 'RADIO', options: opt(it.options) } }, questions: it.rows.map((r) => ({ required: false, rowQuestion: { title: String(r) } })) } };
+    else item = { title: it.title, description: it.desc || '', questionItem: { question: { required: it.kind === 'name', choiceQuestion: { type: it.kind === 'name' ? 'DROP_DOWN' : 'CHECKBOX', options: opt(it.options) } } } };
+    reqs.push({ createItem: { item, location: { index: i } } });
+  });
+  const up = await gj(`${FORMS}/${f.formId}:batchUpdate`, jsonOpt('POST', { requests: reqs, includeFormInResponse: false }));
+  const qmap = {};
+  (up.replies || []).slice(1).forEach((rp, i) => {
+    const it = items[i], q = (rp.createItem || {}).questionId || [];
+    if (!it || !it.key) return;
+    if (it.kind === 'grid') { qmap[it.key] = {}; q.forEach((qid, k) => { qmap[it.key][qid] = String(it.rows[k]); }); } else qmap[it.key] = q[0];
+  });
+  try { await formPublish(f.formId, true); } catch (e) { /* 예전 방식 설문지는 만들면 바로 공개됨 */ }
+  return { ok: true, id: f.formId, url: f.responderUri || `https://docs.google.com/forms/d/${f.formId}/viewform`, qmap };
+}
+async function formResponses(id) {
+  const out = []; let tok = '';
+  for (let i = 0; i < 20; i++) {
+    const j = await gj(`${FORMS}/${encodeURIComponent(id)}/responses?pageSize=5000${tok ? '&pageToken=' + encodeURIComponent(tok) : ''}`);
+    out.push(...(j.responses || [])); tok = j.nextPageToken; if (!tok) break;
+  }
+  return { ok: true, responses: out };
+}
+
 /* ---------------- 비밀번호 (이 브라우저에서 확인) ---------------- */
 async function sha256(s) {
   if (window.crypto && crypto.subtle) { const b = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s)); return [...new Uint8Array(b)].map((x) => x.toString(16).padStart(2, '0')).join(''); }
@@ -342,6 +379,9 @@ async function handle(action, d) {
     case 'clearData': await checkPw(d.pw); return clearData(d.targets || []);
     case 'writeTable': await checkPw(d.pw); await writeTable(d.name, d.rows); return { ok: true };
     case 'exportSheet': return exportSheet(d.title, d.sheets);
+    case 'formCreate': return formsCall(() => formCreate(d.title, d.desc, d.items));
+    case 'formResponses': return formsCall(() => formResponses(String(d.id)));
+    case 'formClose': return formsCall(() => formPublish(String(d.id), !!d.open));
     case 'uploadFile': return upload(d.data, d.mime, d.name);
     case 'getFile': {
       const id = encodeURIComponent(String(d.fileId));
