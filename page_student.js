@@ -548,20 +548,18 @@ function formItems(round, opts) {
   const roster = APP.roster(), names = roster.map(optLabel), items = [];
   items.push({ key: 'name', kind: 'name', title: '내 이름', desc: '내 번호와 이름을 골라요.', options: names });
   if (opts.nom) NOM_CTX.forEach(([c, n, d]) => {
-    items.push({ kind: 'page', title: `${n} — ${d}`, desc: '고르고 싶은 친구가 없으면 비워 두어도 돼요. 자기 이름은 고르지 마세요.' });
-    items.push({ key: c + ':y', kind: 'check', title: `${n}: 함께하고 싶은 친구 (최대 3명)`, desc: d, options: names });
+    items.push({ key: c + ':y', kind: 'check', title: `${n}: 함께하고 싶은 친구 (최대 3명)`, desc: d + ' · 없으면 비워 두어도 돼요.', options: names });
     items.push({ key: c + ':n', kind: 'check', title: `${n}: 함께하고 싶지 않은 친구 (최대 3명)`, desc: '선생님만 볼 수 있어요.', options: names });
   });
   if (opts.lv) {
-    items.push({ kind: 'page', title: '친구에 대한 내 생각', desc: '친구마다 가장 가까운 것을 하나씩 골라요. 자기 줄은 비워 두세요.' });
-    items.push({ key: 'lv', kind: 'grid', title: '친구에 대한 내 생각', options: LEVELS.slice().reverse().map(([, n]) => n), rows: names });
+    items.push({ key: 'lv', kind: 'grid', title: '친구에 대한 내 생각', desc: '친구마다 가장 가까운 것을 하나씩 골라요. 자기 줄은 비워 두세요.', options: LEVELS.slice().reverse().map(([, n]) => n), rows: names });
   }
   return items;
 }
 async function formCreate(round, opts) {
   const title = `${round.name} — 교우관계 설문`;
   const r = await api('formCreate', { title, desc: '솔직하게 답해 주세요. 답한 내용은 선생님만 볼 수 있어요.', items: formItems(round, opts) });
-  round.form = { id: r.id, url: r.url, qmap: r.qmap, opts, created: Date.now(), applied: {}, count: 0, closed: false };
+  round.form = { id: r.id, url: r.url, qmap: r.qmap, opts, created: Date.now(), applied: {}, count: 0, closed: false, pages: 1, names: APP.roster().map((x) => [x.num, x.name, APP.gcls(x.gender)]) };
   ST.survey.nom[round.id] = ST.survey.nom[round.id] || {};
   saveSurveyLater(round.id); await flushSurvey();
 }
@@ -618,12 +616,28 @@ function loadQR() {
 function qrCanvas(url, size) {
   const cv = h('canvas', { class: 'qr-cv', width: size, height: size });
   loadQR().then((qrcode) => {
-    const q = qrcode(0, 'M'); q.addData(url); q.make();
+    const q = qrcode(0, 'L'); q.addData(url); q.make();
     const n = q.getModuleCount(), m2 = 4, cell = size / (n + m2 * 2), cx = cv.getContext('2d');
     cx.fillStyle = '#fff'; cx.fillRect(0, 0, size, size); cx.fillStyle = '#111';
     for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) if (q.isDark(r, c)) cx.fillRect(Math.floor((c + m2) * cell), Math.floor((r + m2) * cell), Math.ceil(cell), Math.ceil(cell));
   }).catch(() => { const cx = cv.getContext('2d'); cx.fillStyle = '#f3f4f6'; cx.fillRect(0, 0, size, size); cx.fillStyle = '#6b7280'; cx.font = '14px sans-serif'; cx.fillText('QR을 그리지 못했어요', 12, size / 2); });
   return cv;
+}
+/* 학생용 설문 화면 주소: 설정(이름표·질문 번호)을 주소 # 뒤에 담음 → 서버 없이 학생 화면이 바로 구글 설문지로 제출 */
+function studentLink(round) {
+  const F = round.form; if (!F) return '';
+  const pub = (String(F.url || '').match(/\/forms\/d\/e\/([^/]+)/) || [])[1]; if (!pub) return '';
+  const dec = (q) => (q ? String(parseInt(q, 16)) : '');
+  const e = { n: dec(F.qmap.name) };
+  [['learn', 'l'], ['perf', 'p'], ['lunch', 'u'], ['out', 'o']].forEach(([c, k]) => { if (F.qmap[c + ':y']) { e[k + 'y'] = dec(F.qmap[c + ':y']); e[k + 'n'] = dec(F.qmap[c + ':n']); } });
+  let g = 0;
+  if (F.qmap.lv) { g = {}; Object.entries(F.qmap.lv).forEach(([qid, lab]) => { const n = optNum(lab); if (n != null) g[n] = dec(qid); }); }
+  const names = F.names || APP.roster().map((x) => [x.num, x.name, APP.gcls(x.gender)]);
+  const pages = F.pages || (1 + (F.opts.nom ? 4 : 0) + (F.opts.lv ? 1 : 0));
+  const cfg = { t: `${round.name} 친구 설문`, f: pub, p: pages, e, g, s: names };
+  const bytes = new TextEncoder().encode(JSON.stringify(cfg));
+  let bin = ''; bytes.forEach((b) => { bin += String.fromCharCode(b); });
+  return new URL('student.html', location.href).href.split('?')[0] + '#c=' + btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 function showBigQR(url, title) {
   const ov = h('div', { class: 'qr-full', onclick: () => ov.remove() }, h('div', { class: 'qr-full-t' }, title), qrCanvas(url, Math.min(innerWidth, innerHeight) * 0.7 | 0), h('div', { class: 'qr-full-u' }, url), h('div', { class: 'muted' }, '화면을 누르면 닫혀요'));
@@ -651,15 +665,17 @@ function formPanel(round, redraw) {
         } }, '설문지 만들기')));
       return;
     }
+    const link = studentLink(round) || F2.url;
     const st = h('div', { class: 'muted' }, `응답한 학생 ${F2.count || 0}/${roster.length}명` + (F2.lastSync ? ` · ${new Date(F2.lastSync).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })}에 확인` : ''));
     body.replaceChildren(
-      h('div', { class: 'qr-wrap' }, qrCanvas(F2.url, 240),
+      h('div', { class: 'qr-wrap' }, qrCanvas(link, 260),
         h('div', { class: 'qr-side' },
           F2.closed ? h('div', { class: 'banner warn', style: 'margin:0 0 8px' }, '응답을 마감했어요.') : null,
-          h('div', { class: 'qr-url' }, F2.url),
+          h('div', { class: 'muted', style: 'font-size:13px;margin-bottom:6px' }, '학생은 이름 칸을 눌러 고르는 화면으로 응답해요.'),
           h('div', { class: 'row', style: 'gap:6px;flex-wrap:wrap;margin:8px 0' },
-            h('button', { class: 'sm primary', onclick: () => showBigQR(F2.url, `${round.name} 교우관계 설문`) }, '크게 보기'),
-            h('button', { class: 'sm', onclick: () => { navigator.clipboard && navigator.clipboard.writeText(F2.url).then(() => toast('링크를 복사했어요')); } }, '링크 복사'),
+            h('button', { class: 'sm primary', onclick: () => showBigQR(link, `${round.name} 친구 설문`) }, '크게 보기'),
+            h('button', { class: 'sm', onclick: () => { navigator.clipboard && navigator.clipboard.writeText(link).then(() => toast('학생용 링크를 복사했어요')); } }, '링크 복사'),
+            h('a', { class: 'sm-link', href: link, target: '_blank', rel: 'noopener' }, '학생 화면 미리보기'),
             h('button', { class: 'sm', onclick: async (e) => { e.target.disabled = true; try { await formSync(round); draw(); } catch (er) { toast(errMsg(er), true); } e.target.disabled = false; } }, '응답 지금 가져오기')),
           st,
           h('div', { class: 'row', style: 'gap:6px;flex-wrap:wrap;margin-top:12px' },
