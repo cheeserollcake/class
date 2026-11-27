@@ -92,9 +92,14 @@ async function exportSheet(name, rows) {
 /* ---------- 페이지 ---------- */
 APP.gradeCore = { GR, ensure, loadKeys, perfKey, bandIdx, semToggle: (r) => semToggle(r), num, fmt, saveCfg: () => saveCfg(), exportSheet: (n, r) => exportSheet(n, r) };
 APP.pages.grade = () => {
-  const wrap = h('div'), body = h('div'), tabs = h('div', { class: 'tabs' });
+  const wrap = h('div', { class: 'gr-page' }), body = h('div'), tabs = h('div', { class: 'tabs' });
+  // 표 너비: 맞춤(내용만큼) / 좁게 / 보통 / 꽉 차게 — 이 브라우저에 기억
+  const TW = [['fit', '맞춤'], ['s', '좁게'], ['m', '보통'], ['full', '꽉 차게']];
+  let tw = 'full'; try { tw = localStorage.getItem('grade_tw') || 'full'; } catch (e) { /* 기본 */ }
+  wrap.dataset.tw = tw;
+  const twCtl = () => h('div', { class: 'tw-seg', title: '성적 관리 표의 너비' }, h('span', null, '표 너비'), TW.map(([v, n]) => h('button', { class: 'sm' + (wrap.dataset.tw === v ? ' on' : ''), onclick: () => { wrap.dataset.tw = v; try { localStorage.setItem('grade_tw', v); } catch (e) { /* 저장 안 됨 */ } drawTabs(); } }, n)));
   const drawTabs = () => tabs.replaceChildren(...[['perf', '수행평가 관리'], ['etc', '기타 평가 관리'], ['trend', '성적 추이'], ['view', '성적 조회'], ['cmt', '평어 관리'], ['gen', '평어 생성']].map(([id, n]) =>
-    h('button', { class: 'tab' + (GR.tab === id ? ' active' : ''), onclick: () => { GR.tab = id; drawTabs(); draw(); } }, n)), h('div', { style: 'flex:1' }), h('button', { class: 'sm', onclick: exportGrades }, '내보내기'));
+    h('button', { class: 'tab' + (GR.tab === id ? ' active' : ''), onclick: () => { GR.tab = id; drawTabs(); draw(); } }, n)), h('div', { style: 'flex:1' }), twCtl(), h('button', { class: 'sm', onclick: exportGrades }, '내보내기'));
   const draw = async () => {
     body.replaceChildren(APP.loading());
     try {

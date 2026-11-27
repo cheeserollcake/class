@@ -153,8 +153,13 @@ const soundBox = () => h('label', { class: 'row', style: 'gap:6px;cursor:pointer
 APP._draw = { makeTeams: (...a) => makeTeams(...a), makeManito: (...a) => makeManito(...a) };   // 시험용
 APP.pages.draw = () => {
   const wrap = h('div'), body = h('div'), tabs = h('div', { class: 'tabs' });
+  const gear = h('button', { class: 'tabs-gear', title: '조건 설정 (비밀번호 필요)', onclick: async () => {
+    if (!D.cfg) return;
+    const ask = APP.pwAsk; if (ask && !(await ask('조건 설정', '선생님 비밀번호를 넣어 주세요.'))) return;
+    openCfg(draw);
+  } }, '설정');
   const drawTabs = () => tabs.replaceChildren(...[['pick', '뽑기'], ['team', '팀 구성'], ['mani', '마니또']].map(([id, n]) =>
-    h('button', { class: 'tab' + (D.sub === id ? ' active' : ''), onclick: () => { D.sub = id; drawTabs(); draw(); } }, n)));
+    h('button', { class: 'tab' + (D.sub === id ? ' active' : ''), onclick: () => { D.sub = id; drawTabs(); draw(); } }, n)), h('div', { style: 'flex:1' }), gear);
   const draw = () => {
     body.replaceChildren(); document.querySelectorAll('.confetti').forEach((c) => c.remove());
     if (!roster().length) return body.append(h('div', { class: 'card placeholder' }, '먼저 학급 기초설정에서 명렬표를 입력해 주세요.'));
@@ -162,12 +167,6 @@ APP.pages.draw = () => {
     body.append(D.sub === 'pick' ? viewPick(draw) : D.sub === 'team' ? viewTeam(draw) : viewMani(draw));
   };
   wrap.append(tabs, body); drawTabs(); body.append(APP.loading());
-  // 제목(뽑기) 옆 설정 버튼 → 지금 탭의 조건
-  setTimeout(() => {
-    const t = document.querySelector('#main .page-title'); if (!t || t.querySelector('.title-gear')) return;
-    t.classList.add('with-gear');
-    t.append(h('button', { class: 'title-gear', title: '조건 설정', onclick: () => { if (!D.cfg) return; openCfg(draw); } }, '⚙ 설정'));
-  }, 0);
   ensure().then(draw).catch((e) => { D.cfg = D.cfg || { teamAvoid: [], maniAvoid: [] }; D.hist = D.hist || []; draw(); toast(errMsg(e), true); });
   return wrap;
 };
@@ -246,18 +245,23 @@ function viewPick(redraw) {
   const n = Math.max(1, Math.min(P.n, pool.length));
   if (P.go) { P.go = false; if (pool.length) return pickRun(redraw, go, reset); }
   const btn = h('button', { class: 'primary', disabled: !pool.length, onclick: go }, pool.length ? (P.last ? '다음 뽑기' : '뽑기') : '남은 학생 없음');
-  const bar = h('div', { class: 'row draw-bar' }, h('b', null, `${n}명 뽑기 · ${gName}`),
-    D.absent.size ? h('span', { class: 'muted' }, `결석 ${D.absent.size}명`) : null,
-    P.noRepeat ? h('span', { class: 'muted' }, `남은 학생 ${pool.length}명`) : null,
-    h('div', { style: 'flex:1' }), btn, P.noRepeat ? h('button', { onclick: reset, title: '이미 뽑힌 학생 이력을 지워요' }, '초기화') : null);
+  const info = [`${n}명 · ${gName}`, D.absent.size ? `결석 ${D.absent.size}명` : null, P.noRepeat ? `남은 학생 ${pool.length}명` : null];
+  const rst = P.noRepeat ? h('button', { onclick: reset, title: '이미 뽑힌 학생 이력을 지워요' }, '초기화') : null;
   const stage = h('div', { class: 'draw-stage' });
   if (P.last && P.last.length) {
     const grid = h('div', { class: 'slot-grid' });
     P.last.forEach((num) => { const st = stu(num); grid.append(h('div', { class: 'slot landed ' + gcls(st ? st.gender : '') }, h('span', null, st ? st.name : num + '번'))); });
-    stage.append(h('div', { class: 'draw-title' }, '지난 결과'), grid);
+    stage.append(stageHead(h('div', { class: 'draw-title' }, '지난 결과'), info, [btn, rst]), grid);
     layoutSlots(stage, grid, P.last.length, P.last.map((x) => nm(x)));
-  } else stage.append(h('div', { class: 'draw-ready' }, pool.length ? h('button', { class: 'primary big', onclick: go }, '뽑기 시작') : h('div', { class: 'muted' }, '뽑을 학생이 없어요. 초기화하거나 ⚙ 설정에서 조건을 바꿔 보세요.')));
-  return h('div', null, h('div', { class: 'card' }, bar), stage);
+  } else stage.append(stageHead(h('div', { class: 'draw-title' }, ''), info, [rst]), h('div', { class: 'draw-ready' }, pool.length ? h('button', { class: 'primary big', onclick: go }, '뽑기 시작') : h('div', { class: 'muted' }, '뽑을 학생이 없어요. 초기화하거나 설정에서 조건을 바꿔 보세요.')));
+  return stage;
+}
+/* 결과창 머리: 왼쪽 정보 · 가운데 제목 · 오른쪽 버튼 */
+function stageHead(title, info, btns) {
+  return h('div', { class: 'stage-head' },
+    h('div', { class: 'sh-info' }, ...info.filter(Boolean).map((t) => h('span', null, t))),
+    title,
+    h('div', { class: 'sh-btns' }, ...btns.filter(Boolean)));
 }
 function layoutSlots(stage, grid, n, names) {
   const L = maxLen(names);
@@ -282,7 +286,6 @@ function pickRun(redraw, go, reset) {
   const slots = result.map(() => { const el = h('div', { class: 'slot spin' }, h('span', null, '?')); grid.append(el); return el; });
   const remain = pool.length - (P.noRepeat ? n : 0);
   const again = h('button', { class: 'primary', disabled: true, onclick: go }, remain ? '다음 뽑기' : '남은 학생 없음');
-  stage.append(title, grid);
   const L = maxLen(pool.map((x) => x.name));
   relayout = () => {
     if (!alive(stage)) return;
@@ -298,8 +301,8 @@ function pickRun(redraw, go, reset) {
     }
     grid.style.setProperty('--fs', Math.max(14, Math.floor(f)) + 'px');
   };
-  const bar = h('div', { class: 'row draw-bar' }, h('b', null, `${n}명 뽑기 · ${gName}`), D.absent.size ? h('span', { class: 'muted' }, `결석 ${D.absent.size}명`) : null, P.noRepeat ? h('span', { class: 'muted' }, `남은 학생 ${remain}명`) : null,
-    h('div', { style: 'flex:1' }), again, P.noRepeat ? h('button', { onclick: reset, title: '이미 뽑힌 학생 이력을 지워요' }, '초기화') : null);
+  stage.append(stageHead(title, [`${n}명 · ${gName}`, D.absent.size ? `결석 ${D.absent.size}명` : null, P.noRepeat ? `남은 학생 ${remain}명` : null],
+    [again, P.noRepeat ? h('button', { onclick: reset, title: '이미 뽑힌 학생 이력을 지워요' }, '초기화') : null]), grid);
   // 애니메이션
   (async () => {
     await wait(30); relayout();
@@ -322,7 +325,7 @@ function pickRun(redraw, go, reset) {
       spin();
     });
   })();
-  return h('div', null, h('div', { class: 'card' }, bar), stage);
+  return stage;
 }
 
 /* =====================================================
@@ -383,12 +386,11 @@ function viewTeam(redraw) {
   const go = () => { actx(); Tm.go = true; redraw(); };
   if (Tm.go) { Tm.go = false; if (N >= 2) return teamRun(redraw, go); }
   const mname = { none: '성별 고려 안 함', equal: '성비 동등하게', sep: '남녀 따로' }[Tm.mode];
-  const bar = h('div', { class: 'row draw-bar' }, h('b', null, `${Tm.n}팀 · ${mname}`), D.absent.size ? h('span', { class: 'muted' }, `결석 ${D.absent.size}명`) : null,
-    h('div', { style: 'flex:1' }), h('button', { class: 'primary', disabled: N < 2, onclick: go }, Tm.last ? '다시 구성' : '팀 구성'));
+  const info = [`${Tm.n}팀 · ${mname}`, D.absent.size ? `결석 ${D.absent.size}명` : null];
   const stage = h('div', { class: 'draw-stage team' });
-  if (Tm.last) { stage.append(h('div', { class: 'draw-title' }, '지난 결과')); const g = teamGrid(Tm.last.teams, true); stage.append(g.grid); layoutTeams(stage, g.grid, Tm.last.teams, null); }
-  else stage.append(h('div', { class: 'draw-ready' }, N >= 2 ? h('button', { class: 'primary big', onclick: go }, '팀 구성 시작') : h('div', { class: 'muted' }, '학생이 2명 이상 있어야 해요.')));
-  return h('div', null, h('div', { class: 'card' }, bar), stage);
+  if (Tm.last) { stage.append(stageHead(h('div', { class: 'draw-title' }, '지난 결과'), info, [h('button', { class: 'primary', disabled: N < 2, onclick: go }, '다시 구성')])); const g = teamGrid(Tm.last.teams, true); stage.append(g.grid); layoutTeams(stage, g.grid, Tm.last.teams, null); }
+  else stage.append(stageHead(h('div', { class: 'draw-title' }, ''), info, []), h('div', { class: 'draw-ready' }, N >= 2 ? h('button', { class: 'primary big', onclick: go }, '팀 구성 시작') : h('div', { class: 'muted' }, '학생이 2명 이상 있어야 해요.')));
+  return stage;
 }
 function teamGrid(teams, landed) {
   const grid = h('div', { class: 'team-grid' }), cells = [];
@@ -430,10 +432,9 @@ function teamRun(redraw, go) {
   const { grid, cells } = teamGrid(res.teams, false);
   const again = h('button', { class: 'primary', disabled: true, onclick: go }, '다시 구성');
   const note = h('div');
-  stage.append(title, grid, note);
-  layoutTeams(stage, grid, res.teams, note);
   const mname = { none: '성별 고려 안 함', equal: '성비 동등하게', sep: '남녀 따로' }[Tm.mode];
-  const bar = h('div', { class: 'row draw-bar' }, h('b', null, `${Tm.n}팀 · ${mname}`), D.absent.size ? h('span', { class: 'muted' }, `결석 ${D.absent.size}명`) : null, h('div', { style: 'flex:1' }), again);
+  stage.append(stageHead(title, [`${Tm.n}팀 · ${mname}`, D.absent.size ? `결석 ${D.absent.size}명` : null], [again]), grid, note);
+  layoutTeams(stage, grid, res.teams, note);
   (async () => {
     await wait(30); relayout();
     const dur = 2600; SND.roll(dur / 1000); const t0 = performance.now();
@@ -456,7 +457,7 @@ function teamRun(redraw, go) {
     };
     spin();
   })();
-  return h('div', null, h('div', { class: 'card' }, bar), stage);
+  return stage;
 }
 
 /* =====================================================

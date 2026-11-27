@@ -287,7 +287,7 @@ function renderShell() {
       h('span', null, t.name), t.pw && !S.unlocked ? h('span', { class: 'lock' }, '잠김') : null)),
     h('div', { class: 'spacer' }),
     S.unlocked ? h('button', { class: 'ghost sm', onclick: () => { lock(); toast('잠갔습니다'); } }, '지금 잠그기') : null,
-    h('div', { class: 'who' }, DEMO ? '데모 모드' : S.email),
+    DEMO ? h('div', { class: 'who' }, '데모 모드') : null,
     DEMO ? null : h('button', { class: 'ghost sm', onclick: logout }, '로그아웃'), togM);
   root.append(h('div', { class: 'shell' }, nav, h('main', { class: 'main', id: 'main' })), fab);
   document.body.classList.toggle('nav-off', closed);
@@ -306,7 +306,7 @@ function go(id) {
 function renderPage() {
   const main = $('#main'); main.replaceChildren();
   const t = TABS.find((x) => x.id === S.tab);
-  main.append(h('h2', { class: 'page-title' }, t.name));
+  document.title = t.name + ' · 학급관리';
   if (S.tab === 'setup') main.append(pageSetup());
   else if (S.tab === 'submit') main.append(pageSubmit());
   else if (APP.pages[S.tab]) main.append(APP.pages[S.tab]());

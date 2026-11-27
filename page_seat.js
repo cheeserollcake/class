@@ -262,8 +262,7 @@ function view(redraw) {
 
   return h('div', null,
     h('div', { class: 'card' },
-      h('div', { class: 'row gap' }, shuffleBtn, skipBtn, saveBtn, loadSel, delBtn, exportBtn, sound),
-      h('div', { class: 'muted' }, '설정: ' + ruleText(cfg) + ' (학급 기초설정에서 바꿀 수 있어요)')),
+      h('div', { class: 'row gap' }, shuffleBtn, skipBtn, saveBtn, loadSel, delBtn, exportBtn, sound)),
     asg && SE.cur && SE.cur.notes && SE.cur.notes.length ? h('div', { class: 'banner warn' }, SE.cur.notes.join(' / ')) : null,
     h('div', { class: 'card' },
       banner,

@@ -62,6 +62,10 @@ function bracket(c) {
 function arranged(c) {
   const big = c.big || {}, bm = (m) => big[m.a] && big[m.b];
   const list = c.matches.map((m, idx) => ({ ...m, key: 'm' + idx, res: c.res['m' + idx] || null, bigm: bm(m) }));
+  if (c.manualOrder) {   // 선생님이 순서를 직접 바꾼 뒤에는 그 순서 그대로, 경기장만 차례로
+    list.forEach((q, i) => { q.court = (i % c.courts) + 1; q.no = i + 1; });
+    return list;
+  }
   const rest = [...list.filter((m) => !m.bigm), ...list.filter((m) => m.bigm)], out = [];
   while (rest.length) {
     const used = new Set(), slot = [];
@@ -117,12 +121,12 @@ function save(c) {
   clearTimeout(saveT);
   saveT = setTimeout(() => APP.kvSet(keyOf(c.id), pack(c)).catch((e) => toast(e.message === 'TOOBIG' ? '대회 기록이 너무 커서 저장하지 못했어요.' : errMsg(e), true)), 500);
   const it = C.index.list.find((x) => x.id === c.id);
-  if (it) { const p = progress(c); Object.assign(it, { name: c.name, format: c.format, unit: c.unit, done: p.done, total: p.total, archived: !!c.archived }); saveIndex(); }
+  if (it) { const p = progress(c); Object.assign(it, { name: c.name, icon: c.icon || '', format: c.format, unit: c.unit, done: p.done, total: p.total, archived: !!c.archived }); saveIndex(); }
 }
 async function saveNow(c) {
   clearTimeout(saveT); clearTimeout(saveIdxT); C.cache[c.id] = c;
   const it = C.index.list.find((x) => x.id === c.id);
-  if (it) { const p = progress(c); Object.assign(it, { name: c.name, format: c.format, unit: c.unit, done: p.done, total: p.total, archived: !!c.archived }); }
+  if (it) { const p = progress(c); Object.assign(it, { name: c.name, icon: c.icon || '', format: c.format, unit: c.unit, done: p.done, total: p.total, archived: !!c.archived }); }
   try { await APP.kvSet(keyOf(c.id), pack(c)); await APP.kvSet('contest:index', C.index); } catch (e) { toast(errMsg(e), true); }
 }
 function saveIndex() { clearTimeout(saveIdxT); saveIdxT = setTimeout(() => APP.kvSet('contest:index', C.index).catch((e) => toast(errMsg(e), true)), 400); }
@@ -147,7 +151,34 @@ const stepper = (val, min, max, on, cls) => h('div', { class: 'cz-stepper ' + (c
   h('button', { type: 'button', onclick: () => on(Math.max(min, val - 1)) }, '−'),
   h('input', { type: 'number', inputmode: 'numeric', value: val, min, max, onchange: (e) => on(Math.max(min, Math.min(max, Number(e.target.value) | 0))) }),
   h('button', { type: 'button', onclick: () => on(Math.min(max, val + 1)) }, '+'));
-const bar = (pct) => h('span', { class: 'cz-bar' }, h('i', { style: `width:${pct}%` }));
+/* 종목 이름 → 어울리는 아이콘 (설정에서 바꿀 수 있어요) */
+const SPORTS = [[/축구|풋살|킥볼|발야구/, '⚽'], [/농구/, '🏀'], [/배구|피구|티볼 ?배구/, '🏐'], [/야구|티볼|소프트볼/, '⚾'], [/배드민턴|셔틀/, '🏸'], [/탁구/, '🏓'],
+  [/테니스|정구/, '🎾'], [/줄넘기|줄다리기/, '🪢'], [/이어달리기|계주|달리기|육상|마라톤|릴레이/, '🏃'], [/수영/, '🏊'], [/볼링/, '🎳'], [/골프|그라운드 ?골프/, '⛳'],
+  [/핸드볼/, '🤾'], [/플라잉 ?디스크|원반|프리스비/, '🥏'], [/컬링/, '🥌'], [/씨름|레슬링/, '🤼'], [/태권도|유도|검도|무술/, '🥋'], [/하키|플로어볼/, '🏑'],
+  [/럭비|풋볼|플래그/, '🏉'], [/자전거|사이클/, '🚴'], [/스키|썰매/, '⛷️'], [/스케이트|빙상/, '⛸️'], [/양궁|활쏘기|과녁/, '🎯'], [/다트/, '🎯'], [/체스|바둑|장기|오목/, '♟️'],
+  [/보드게임|윷|주사위|카드/, '🎲'], [/퀴즈|골든벨|도전/, '❓'], [/노래|합창|음악/, '🎵'], [/그림|미술/, '🎨'], [/줄|공기|딱지|제기/, '🪀'], [/게임|e스포츠|이스포츠/, '🎮']];
+const sportIcon = (name) => { const t = String(name || ''); for (const [re, ic] of SPORTS) if (re.test(t)) return ic; return '🏆'; };
+const icOf = (x) => (x && x.icon) || sportIcon(x && x.name);
+const ICON_PICKS = ['⚽', '🏀', '🏐', '⚾', '🏸', '🏓', '🎾', '🏃', '🪢', '🥏', '🏉', '🏑', '🎳', '⛳', '🥌', '🤼', '🥋', '♟️', '🎲', '❓', '🎯', '🏊', '🚴', '🏆'];
+const RUN_KIND = (ic) => /🏃|🏊|🚴|🤾|🤼|⛷️|⛸️/.test(ic) ? 'hop' : /🏆|❓|🎵|🎨|🎮|♟️|🎯/.test(ic) ? 'sway' : 'roll';
+const bar = (pct, ic) => h('span', { class: 'cz-bar' + (ic ? ' has-run' : '') }, h('i', { style: `width:${pct}%` }),
+  ic ? h('span', { class: 'cz-run ' + RUN_KIND(ic), style: `left:${pct}%` }, h('em', null, ic)) : null);
+/* 아이콘 고르기 칸 (d.icon: 비우면 이름으로 자동) */
+function iconField(d) {
+  const box = h('div', { class: 'field cz-icf' });
+  const rd = () => {
+    const auto = sportIcon(d.name), cur = d.icon || auto;
+    box.replaceChildren(h('label', null, '진행 바 아이콘'),
+      h('div', { class: 'cz-icrow' },
+        h('span', { class: 'cz-icnow' }, cur),
+        h('input', { value: d.icon || '', placeholder: `자동: ${auto}`, maxlength: 4, style: 'width:90px', oninput: (e) => { d.icon = e.target.value.trim(); box.querySelector('.cz-icnow').textContent = d.icon || sportIcon(d.name); } }),
+        h('button', { type: 'button', class: 'sm', 'data-noic': '1', onclick: () => { d.icon = ''; rd(); } }, '자동으로')),
+      h('div', { class: 'cz-icpick' }, ICON_PICKS.map((ic) => h('button', { type: 'button', class: 'cz-icb' + (cur === ic ? ' on' : ''), 'data-noic': '1', onclick: () => { d.icon = ic; rd(); } }, ic))),
+      h('div', { class: 'muted', style: 'font-size:12px' }, '대회 이름에 맞춰 자동으로 골라요. 다른 걸 쓰려면 고르거나 이모지를 넣어 주세요.'));
+  };
+  rd(); box.refresh = rd;
+  return box;
+}
 function dialog(title, body, foot, cls) {
   const ov = h('div', { class: 'overlay' });
   const close = () => { ov.remove(); document.removeEventListener('keydown', esc); };
@@ -352,10 +383,11 @@ function teamBoard(T, rd, lockCount) {
 
 /* ---------- 대회 만들기 ---------- */
 function wizard(onCreate) {
-  const d = { name: '', format: 'league', legs: 1, pts: { w: 3, d: 1, l: 0 }, draw: true, tie: 'diff', third: false, seed: 'random', scoring: 'score', useTarget: false, target: 11, sets: 3, courts: 1, unit: 'individual', classes: 4, classNames: [] };
+  const d = { name: '', icon: '', format: 'league', legs: 1, pts: { w: 3, d: 1, l: 0 }, draw: true, tie: 'diff', third: false, seed: 'random', scoring: 'score', useTarget: false, target: 11, sets: 3, courts: 1, unit: 'individual', classes: 4, classNames: [] };
   const people = new Set(roster().map((s) => s.num));
   const T = { teams: [1, 2, 3, 4].map((n) => ({ id: uid(), name: `${n}팀`, members: [] })), pool: roster().map((s) => s.num), gmode: 'equal', pick: null };
   let step = 0;
+  const wicf = iconField(d);
   const STEPS = ['대회 방식', '참가 단위', '경기 규칙', '참가자'];
   const body = h('div'), foot = h('div', { class: 'cz-foot-in' });
   const dl = dialog('대회 만들기', body, foot, 'wide');
@@ -370,9 +402,9 @@ function wizard(onCreate) {
     const steps = h('div', { class: 'cz-steps' }, STEPS.map((n, i) => h('span', { class: 'cz-stp' + (i === step ? ' on' : i < step ? ' done' : '') }, h('i', null, i + 1), n)));
     let content;
     if (step === 0) {
-      const nm = h('input', { value: d.name, placeholder: '예: 5학년 피구 리그', maxlength: 30, oninput: (e) => { d.name = e.target.value; nextBtn.disabled = !d.name.trim(); } });
+      const nm = h('input', { value: d.name, placeholder: '예: 5학년 피구 리그', maxlength: 30, oninput: (e) => { d.name = e.target.value; nextBtn.disabled = !d.name.trim(); wicf.refresh(); } });
       setTimeout(() => nm.focus(), 0);
-      content = h('div', null, h('div', { class: 'field' }, h('label', null, '대회 이름 (종목)'), nm),
+      content = h('div', null, h('div', { class: 'field' }, h('label', null, '대회 이름 (종목)'), nm), wicf,
         h('div', { class: 'cz-opts' }, big('format', 'league', '리그', '모든 참가자가 서로 겨루고 승점으로 순위를 정해요'), big('format', 'tournament', '토너먼트', '지면 탈락, 이기면 다음 경기로 올라가요')));
     } else if (step === 1) {
       content = h('div', null, h('div', { class: 'cz-opts three' }, big('unit', 'individual', '개인', '학생 한 명 한 명이 참가해요'), big('unit', 'team', '팀', '학생들을 모아 팀을 만들어요'), big('unit', 'class', '반대항', '반끼리 겨뤄요')),
@@ -400,7 +432,7 @@ function wizard(onCreate) {
     let es = entrants(); const isL = d.format === 'league';
     if (!isL && d.seed === 'random') es = shuffle(es);
     es = es.map((e, i) => ({ ...e, id: 'e' + i }));
-    const c = { id: uid(), name: d.name.trim(), format: d.format, unit: d.unit, created: Date.now(), legs: d.legs, pts: { ...d.pts }, draw: isL && d.draw, tie: d.scoring === 'wdl' ? 'h2h' : d.tie, third: d.third,
+    const c = { id: uid(), name: d.name.trim(), icon: d.icon || sportIcon(d.name), format: d.format, unit: d.unit, created: Date.now(), legs: d.legs, pts: { ...d.pts }, draw: isL && d.draw, tie: d.scoring === 'wdl' ? 'h2h' : d.tie, third: d.third,
       scoring: d.scoring, target: d.scoring === 'score' && d.useTarget ? d.target : null, sets: d.sets, courts: d.courts, entrants: es, res: {}, out: {}, big: {}, live: {} };
     const ids = es.map((_, i) => i);
     if (isL) c.matches = leagueMatches(ids.length, d.legs); else c.slots = makeSlots(ids);
@@ -412,16 +444,18 @@ function wizard(onCreate) {
 /* ---------- 설정 고치기 ---------- */
 function editDialog(c, onSave) {
   const played = Object.keys(c.res).length > 0, isL = c.format === 'league', hasDraw = Object.values(c.res).some((r) => r && r.w === 'd');
-  const d = { name: c.name, legs: c.legs, pts: { ...c.pts }, draw: !!c.draw, tie: c.tie, third: !!c.third, scoring: c.scoring, useTarget: !!c.target, target: c.target || 11, sets: c.sets || 3, courts: c.courts };
+  const d = { name: c.name, icon: c.icon || '', legs: c.legs, pts: { ...c.pts }, draw: !!c.draw, tie: c.tie, third: !!c.third, scoring: c.scoring, useTarget: !!c.target, target: c.target || 11, sets: c.sets || 3, courts: c.courts };
   const body = h('div'); const foot = h('div', { class: 'cz-foot-in' });
   const dl = dialog('대회 설정', body, foot);
+  const icf = iconField(d);
   const rd = () => {
     body.replaceChildren(h('p', { class: 'muted', style: 'margin:0 0 10px' }, played ? '경기 기록이 있어서 일부 항목은 바꿀 수 없어요. 승점 같은 규칙은 바꾸면 지금까지의 기록에도 바로 적용돼요.' : '아직 기록이 없어서 모든 규칙을 바꿀 수 있어요.'),
-      h('div', { class: 'field' }, h('label', null, '대회 이름'), h('input', { value: d.name, maxlength: 30, oninput: (e) => { d.name = e.target.value; } })),
+      h('div', { class: 'field' }, h('label', null, '대회 이름'), h('input', { value: d.name, maxlength: 30, oninput: (e) => { d.name = e.target.value; icf.refresh(); } })),
+      icf,
       ...rulesBody(d, rd, isL, { edit: true, legs: played, scoring: played, noDraw: hasDraw }));
     foot.replaceChildren(h('div'), h('div', { class: 'row', style: 'gap:6px' }, h('button', { onclick: dl.close }, '취소'), h('button', { class: 'primary', onclick: () => {
       if (!d.name.trim()) return toast('대회 이름을 넣어 주세요', true);
-      c.name = d.name.trim(); c.pts = d.pts; c.courts = d.courts; c.tie = (played ? c.scoring : d.scoring) === 'wdl' ? 'h2h' : d.tie;
+      c.name = d.name.trim(); c.icon = d.icon || sportIcon(c.name); c.pts = d.pts; c.courts = d.courts; c.tie = (played ? c.scoring : d.scoring) === 'wdl' ? 'h2h' : d.tie;
       if (isL) c.draw = d.draw; else c.third = d.third;
       c.target = (played ? c.scoring : d.scoring) === 'score' && d.useTarget ? d.target : null;
       if (!played) { c.scoring = d.scoring; c.sets = d.sets; if (isL && d.legs !== c.legs) { c.legs = d.legs; c.matches = leagueMatches(c.entrants.length, d.legs); c.live = {}; } }
@@ -462,6 +496,17 @@ function resultDialog(c, m, nm, onSave, onDelete) {
       h('div', { class: 'row', style: 'gap:6px' }, h('button', { onclick: dl.close }, '취소'), c.scoring === 'wdl' ? null : h('button', { class: 'primary', disabled: sa === sb && needWinner, onclick: () => done({ sa, sb, w: sa > sb ? 'a' : sb > sa ? 'b' : 'd' }) }, '저장')));
   };
   rd();
+}
+/* 리그 경기 순서 바꾸기: 지금 보이는 순서에서 fromKey를 toKey 자리로 (기록 번호도 함께 옮김) */
+function reorderMatch(c, fromKey, toKey, after) {
+  const order = arranged(c).map((x) => x.key);
+  const i = order.indexOf(fromKey); if (i < 0) return;
+  order.splice(i, 1);
+  let j = order.indexOf(toKey); if (j < 0) return; if (after) j++;
+  order.splice(j, 0, fromKey);
+  const old = (k) => Number(k.slice(1)), res = {}, live = {};
+  c.matches = order.map((k, n) => { const o = old(k); if (c.res[k]) res['m' + n] = c.res[k]; if (c.live[k]) live['m' + n] = true; return c.matches[o]; });
+  c.res = res; c.live = live; c.manualOrder = true;
 }
 /* 리그 경기 하나를 일정에서 빼기 (기록 번호를 다시 맞춤) */
 function deleteMatch(c, key) {
@@ -508,7 +553,7 @@ function compView(c, redraw) {
     setTimeout(() => document.addEventListener('pointerdown', function f(ev) { if (!pop.contains(ev.target)) { pop.remove(); document.removeEventListener('pointerdown', f); } }), 0);
   };
   const shuffleIt = () => {
-    if (isL) { const perm = shuffle(c.entrants.map((_, i) => i)); c.matches = leagueMatches(c.entrants.length, c.legs).map((m) => ({ ...m, a: perm[m.a], b: perm[m.b] })); }
+    if (isL) { c.manualOrder = false; const perm = shuffle(c.entrants.map((_, i) => i)); c.matches = leagueMatches(c.entrants.length, c.legs).map((m) => ({ ...m, a: perm[m.a], b: perm[m.b] })); }
     else c.slots = makeSlots(arrangeIds(shuffle(c.entrants.map((_, i) => i)), big));
     upd(); toast('대진을 다시 짰어요'); };
 
@@ -526,7 +571,7 @@ function compView(c, redraw) {
         h('button', { class: 'sm', onclick: () => editDialog(c, upd) }, '⚙ 설정'),
         h('button', { class: 'sm', disabled: !played, onclick: () => { if (!confirm('경기 기록을 모두 지울까요? 대진과 참가자는 그대로 두고 결과만 지워요.')) return; c.res = {}; c.live = {}; upd(); } }, '기록 초기화'),
         h('button', { class: 'sm', title: '보관함으로 보내기', onclick: () => { if (!confirm(`'${c.name}' 대회를 보관함으로 보낼까요? 기록은 그대로 남고, 보관함에서 다시 꺼내거나 삭제할 수 있어요.`)) return; c.archived = true; C.cur = null; saveNow(c).then(redraw); } }, '🗄 보관'))),
-    h('div', { class: 'cz-prog' }, bar(pct), h('b', { class: 'cz-pct' }, pct + '%'), champ ? h('span', { class: 'cz-champ' }, `🏆 우승 ${champ}`) : null));
+    h('div', { class: 'cz-prog' }, bar(pct, icOf(c)), h('b', { class: 'cz-pct' }, pct + '%'), champ ? h('span', { class: 'cz-champ' }, `🏆 우승 ${champ}`) : null));
 
   // 참가자 카드
   const ent = isL && c.unit === 'individual' ? null : h('section', { class: 'card' }, h('div', { class: 'cz-ch' }, h('b', null, '참가자'), h('span', { class: 'muted' }, c.entrants.length)),
@@ -540,12 +585,35 @@ function compView(c, redraw) {
     const lv = live[x.key] && !x.res, ho = !x.res && (out[x.a] || out[x.b]);
     const pill = h('span', { class: 'cz-live' + (lv ? ' on' : ''), title: '지금 경기 중이면 눌러서 표시해요', onclick: (e) => { e.stopPropagation(); if (live[x.key]) delete live[x.key]; else live[x.key] = true; upd(); } }, `${x.no}경기`);
     const side = (k) => h('b', { class: 'cz-m' + k + (x.res && x.res.w === k ? ' win' : '') + (out[x[k]] ? ' out' : '') }, nm(x[k]));
-    return h('div', { class: 'cz-mrow' + (x.res ? ' done' : '') + (cvm ? ' cv' : '') + (x.bigm ? ' bigm' : '') + (lv ? ' live' : '') + (ho ? ' hasout' : ''), onclick: () => open(x) },
-      cvm ? h('span', { class: 'cz-mtop' }, pill, x.bigm ? h('span', { class: 'cz-bigtag' }, '🔥 빅매치') : null)
+    const grip = !cvm && isL ? h('span', { class: 'cz-grip', title: '끌어서 경기 순서 바꾸기', onclick: (e) => e.stopPropagation() }, '⠿') : null;
+    if (grip) grip.addEventListener('pointerdown', (e) => dragRow(e, x.key));
+    return h('div', { class: 'cz-mrow' + (x.res ? ' done' : '') + (cvm ? ' cv' : '') + (grip ? ' dg' : '') + (x.bigm ? ' bigm' : '') + (lv ? ' live' : '') + (ho ? ' hasout' : ''), 'data-key': x.key, onclick: () => open(x) },
+      grip, cvm ? h('span', { class: 'cz-mtop' }, pill, x.bigm ? h('span', { class: 'cz-bigtag' }, '🔥 빅매치') : null)
         : h('span', { class: 'cz-mmeta' }, pill, x.bigm ? h('span', { class: 'cz-bigtag' }, '🔥 빅매치') : h('span', { class: 'cz-badge' }, `${x.r + 1}R`), c.courts > 1 ? h('span', { class: 'cz-badge' }, `${x.court}경기장`) : null),
       side('a'), h('span', { class: 'cz-msc' + (x.res ? '' : ' vs') }, scText(c, x.res)), side('b'));
   };
 
+  /* 경기 순서 끌어서 바꾸기 (리그, 한 줄 보기) */
+  const dragRow = (e, key) => {
+    e.preventDefault(); e.stopPropagation();
+    const listEl = e.target.closest('.cz-mlist'); if (!listEl) return;
+    const rowsEl = [...listEl.querySelectorAll('.cz-mrow')], me = rowsEl.find((r) => r.dataset.key === key); if (!me) return;
+    const rects = rowsEl.map((r) => r.getBoundingClientRect()), from = rowsEl.indexOf(me), y0 = e.clientY, hgt = rects[from].height + 6;
+    let to = from;
+    me.classList.add('drag'); e.target.setPointerCapture(e.pointerId);
+    const mv = (ev) => {
+      const dy = ev.clientY - y0; me.style.transform = `translateY(${dy}px)`;
+      if (ev.clientY > innerHeight - 60) scrollBy(0, 12); else if (ev.clientY < 60) scrollBy(0, -12);
+      to = Math.max(0, Math.min(rowsEl.length - 1, Math.round(from + dy / hgt)));
+      rowsEl.forEach((r, j) => { if (r === me) return; r.style.transform = from < to && j > from && j <= to ? `translateY(${-hgt}px)` : to < from && j >= to && j < from ? `translateY(${hgt}px)` : ''; });
+    };
+    const up = () => {
+      e.target.removeEventListener('pointermove', mv); e.target.removeEventListener('pointerup', up); e.target.removeEventListener('pointercancel', up);
+      rowsEl.forEach((r) => { r.style.transform = ''; r.classList.remove('drag'); });
+      if (to !== from) { reorderMatch(c, key, rowsEl[to].dataset.key, to > from); upd(); }
+    };
+    e.target.addEventListener('pointermove', mv); e.target.addEventListener('pointerup', up); e.target.addEventListener('pointercancel', up);
+  };
   let main;
   if (isL) {
     const rows = standings(c), showFA = c.scoring !== 'wdl';
@@ -670,6 +738,7 @@ async function recOpen(id, redraw) {
   const c = await getContest(id); if (!c) { try { localStorage.removeItem(REC_KEY); } catch (e) { /* 없음 */ } return; }
   const layer = h('div', { class: 'rec-layer' }); document.body.append(layer); document.body.classList.add('rec-on');
   let wi = 2; try { wi = Math.max(0, Math.min(RW.length - 1, Number(localStorage.getItem('rec_w') ?? 2))); } catch (e) { /* 기본 */ }
+  let cview = true; try { cview = localStorage.getItem('rec_cv') !== 'list'; } catch (e) { /* 기본: 경기장 보기 */ }
   const nm = (i) => (i != null && c.entrants[i] ? c.entrants[i].name : '미정');
   const draw = () => {
     const isL = c.format === 'league', list = allGames(c), p = progress(c);
@@ -692,6 +761,7 @@ async function recOpen(id, redraw) {
       h('div', { class: 'rec-head' },
         h('div', { class: 'rec-title' }, h('span', { class: 'cz-badge' }, '📝 기록 모드'), h('b', null, c.name), h('span', { class: 'muted' }, `${p.done} / ${p.total}경기`)),
         h('div', { class: 'rec-tools' },
+          c.courts > 1 ? seg(cview ? 'c' : 'l', [['c', '경기장 보기'], ['l', '한 줄 보기']], (v) => { cview = v === 'c'; try { localStorage.setItem('rec_cv', cview ? 'court' : 'list'); } catch (e) { /* 저장 안 됨 */ } draw(); }) : null,
           h('span', { class: 'muted', style: 'font-size:12px' }, '화면 너비'),
           h('button', { class: 'sm', disabled: wi === 0, onclick: () => { wi--; try { localStorage.setItem('rec_w', wi); } catch (e) { /* 저장 안 됨 */ } draw(); } }, '◀ 좁게'),
           h('button', { class: 'sm', disabled: wi === RW.length - 1, onclick: () => { wi++; try { localStorage.setItem('rec_w', wi); } catch (e) { /* 저장 안 됨 */ } draw(); } }, '넓게 ▶'),
@@ -700,16 +770,25 @@ async function recOpen(id, redraw) {
             try { localStorage.removeItem(REC_KEY); } catch (e) { /* 없음 */ }
             layer.remove(); document.body.classList.remove('rec-on'); if (redraw) redraw(); else if (APP.renderPage) APP.renderPage();
           } }, '나가기 🔒'))),
-      h('div', { class: 'rec-prog' }, bar(p.pct), h('b', null, p.pct + '%')),
-      ready.length ? [h('div', { class: 'rec-h' }, `다가올 경기 ${ready.length}`), h('div', { class: 'rec-list' }, ready.map((x, k) => row(x, k, 'ready')))] : h('div', { class: 'rec-empty' }, p.total && p.done === p.total ? '🏁 모든 경기가 끝났어요!' : '지금 할 수 있는 경기가 없어요.'),
-      wait.length ? [h('div', { class: 'rec-h' }, `대기 (앞 경기 결과를 기다려요) ${wait.length}`), h('div', { class: 'rec-list' }, wait.map((x, k) => row(x, k, 'wait')))] : null,
-      done.length ? [h('div', { class: 'rec-h' }, `끝난 경기 ${done.length}`), h('div', { class: 'rec-list' }, done.slice().reverse().map((x, k) => row(x, k, 'done')))] : null,
+      h('div', { class: 'rec-prog' }, bar(p.pct, icOf(c)), h('b', null, p.pct + '%')),
+      c.courts > 1 && cview
+        ? [h('div', { class: 'rec-courts', style: `--cn:${c.courts}` }, Array.from({ length: c.courts }, (_, ci) => {
+            const r1 = ready.filter((x) => x.court === ci + 1), d1 = done.filter((x) => x.court === ci + 1);
+            return h('div', { class: 'rec-court' }, h('b', { class: 'rec-court-h' }, `${ci + 1}경기장`, h('span', null, ` 남은 ${r1.length}`)),
+              r1.length ? r1.map((x, k) => row(x, k, 'ready')) : h('div', { class: 'rec-empty sm' }, d1.length ? '🏁 이 경기장은 끝났어요' : '경기가 없어요'),
+              d1.length ? [h('div', { class: 'rec-h' }, `끝난 경기 ${d1.length}`), ...d1.slice().reverse().map((x, k) => row(x, k, 'done'))] : null);
+          })),
+          wait.length ? [h('div', { class: 'rec-h' }, `대기 (앞 경기 결과를 기다려요) ${wait.length}`), h('div', { class: 'rec-list' }, wait.map((x, k) => row(x, k, 'wait')))] : null]
+        : [ready.length ? [h('div', { class: 'rec-h' }, `다가올 경기 ${ready.length}`), h('div', { class: 'rec-list' }, ready.map((x, k) => row(x, k, 'ready')))] : h('div', { class: 'rec-empty' }, p.total && p.done === p.total ? '🏁 모든 경기가 끝났어요!' : '지금 할 수 있는 경기가 없어요.'),
+          wait.length ? [h('div', { class: 'rec-h' }, `대기 (앞 경기 결과를 기다려요) ${wait.length}`), h('div', { class: 'rec-list' }, wait.map((x, k) => row(x, k, 'wait')))] : null,
+          done.length ? [h('div', { class: 'rec-h' }, `끝난 경기 ${done.length}`), h('div', { class: 'rec-list' }, done.slice().reverse().map((x, k) => row(x, k, 'done')))] : null],
       h('p', { class: 'muted', style: 'font-size:12px;text-align:center;margin:16px 0' }, '경기를 누르면 결과를 적을 수 있어요. 끝난 경기는 아래로 내려가요. "N경기"를 누르면 경기 중 표시가 켜져요.')));
   };
   draw();
 }
 /* 새로고침해도 기록 모드가 풀리지 않게 */
 APP.contestRecResume = () => { let id = null; try { id = localStorage.getItem(REC_KEY); } catch (e) { /* 없음 */ } if (id) recOpen(id, null).catch(() => {}); };
+APP.pwAsk = pwAsk;
 
 /* ---------- 페이지 ---------- */
 APP.pages.contest = () => {
@@ -721,7 +800,7 @@ APP.pages.contest = () => {
     if (C.index.cur !== C.cur) { C.index.cur = C.cur; saveIndex(); }
     const create = () => wizard(async (c) => {
       const p = progress(c); C.cache[c.id] = c;
-      C.index.list.push({ id: c.id, name: c.name, format: c.format, unit: c.unit, created: c.created, done: p.done, total: p.total });
+      C.index.list.push({ id: c.id, name: c.name, icon: c.icon, format: c.format, unit: c.unit, created: c.created, done: p.done, total: p.total });
       C.cur = C.index.cur = c.id;
       try { await APP.kvSet(keyOf(c.id), pack(c)); await APP.kvSet('contest:index', C.index); toast('대회를 만들었어요'); } catch (e) { toast(errMsg(e), true); }
       redraw();
@@ -730,7 +809,7 @@ APP.pages.contest = () => {
       h('div', { class: 'cz-chips-top' }, live.map((x) => { const pct = x.total ? Math.round(x.done / x.total * 100) : 0;
         return h('button', { type: 'button', class: 'cz-cchip' + (x.id === C.cur ? ' on' : ''), onclick: () => { C.cur = x.id; redraw(); } },
           h('span', { class: 'cz-ctop' }, h('span', { class: 'cz-badge' }, x.format === 'league' ? '리그' : '토너먼트'), h('b', null, x.name)),
-          h('span', { class: 'cz-cbar' }, bar(pct), h('em', null, pct + '%'))); })),
+          h('span', { class: 'cz-cbar' }, bar(pct, icOf(x)), h('em', null, pct + '%'))); })),
       h('div', { class: 'cz-topbtns' }, h('button', { class: 'sm primary', onclick: create }, '+ 대회 만들기'), h('button', { class: 'sm', onclick: () => archiveBox(redraw) }, '🗄 보관함' + (kept ? ` ${kept}` : ''))));
     if (!live.length) return wrap.replaceChildren(top, h('div', { class: 'card cz-empty' }, h('div', { class: 'muted', style: 'margin-bottom:14px' }, '진행 중인 대회가 없어요. 먼저 새 대회를 만들어 주세요.'), h('button', { class: 'primary big', onclick: create }, '+ 대회 만들기')));
     const body = h('div', null, APP.loading());
