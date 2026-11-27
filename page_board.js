@@ -423,7 +423,7 @@ function drawGroupBtns() {
   const same = its.length > 1 && its.every((x) => x.g && x.g === its[0].g);
   grpBtns.replaceChildren(...[
     h('button', { class: 'sm' + (B.multi ? ' primary' : ''), title: '켜면 누르는 상자마다 더해서 골라요 (컴퓨터는 Shift를 누른 채 눌러도 돼요)', onclick: () => { B.multi = !B.multi; drawGroupBtns(); } }, B.multi ? '여러 개 고르는 중' : '여러 개 고르기'),
-    its.length > 1 && !same ? h('button', { class: 'sm primary', title: 'Ctrl+G', onclick: groupSel }, `묶기 (${its.length})`) : null,
+    same ? null : h('button', { class: 'sm' + (its.length > 1 ? ' primary' : ''), disabled: its.length < 2, title: its.length > 1 ? 'Ctrl+G' : 'Shift를 누른 채 상자를 2개 이상 고르면 묶을 수 있어요', onclick: groupSel }, its.length > 1 ? `묶기 (${its.length})` : '묶기'),
     its.some((x) => x.g) ? h('button', { class: 'sm', title: 'Ctrl+Shift+G', onclick: ungroupSel }, '묶음 풀기') : null].filter(Boolean));
 }
 /* 고른 상자들을 감싸는 테두리 + 크기 손잡이 */
