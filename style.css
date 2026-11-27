@@ -670,3 +670,5 @@ input.gcell.locked { background: #f3f4f6 !important; color: var(--sub); }
 .bi.sel.grp { outline-style: dashed; }
 .bd-gbox { position: absolute; border: 2px dashed #2f6fed; border-radius: 10px; pointer-events: none; z-index: 5000; }
 .bd-gbox-rz { position: absolute; right: -9px; bottom: -9px; width: 18px; height: 18px; background: #2f6fed; border: 2px solid #fff; border-radius: 4px; cursor: nwse-resize; pointer-events: auto; touch-action: none; }
+/* 노랑(친해지고 싶음)은 글자를 진하게 */
+.lv.on[data-v="3"], .lv-tag.lv3 { color: #3f3200; }

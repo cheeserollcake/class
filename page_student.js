@@ -97,7 +97,7 @@ async function loadSurvey(main) {
   return sv;
 }
 /* 키보드 숫자 = 값: 1 싫음, 2 그저 그럼, 3 친해지고 싶음, 4 좋음 */
-const LEVELS = [[1, '싫음', '#e5484d'], [2, '그저 그럼', '#9aa3af'], [3, '친해지고 싶음', '#22a06b'], [4, '좋음', '#2f6fed']];
+const LEVELS = [[1, '싫음', '#e5484d'], [2, '그저 그럼', '#3b82f6'], [3, '친해지고 싶음', '#eab308'], [4, '좋음', '#22a06b']];
 const LV_SCORE = { 4: 2, 3: 1, 2: 0, 1: -2 };
 
 /* ---------- 사건 성격(긍정/부정) 판단 ---------- */
@@ -700,11 +700,15 @@ function viewSociogram(redraw) {
     ids.forEach((n) => {
       const x = st[n];
       if (x.nrec && x.bad >= Math.max(3, Math.ceil(x.nrec * 0.2)) && x.bad >= mb + Math.max(sb, 1)) x.flags.unshift('싫어하는 친구가 많음');
-      // 관계의 중심: "좋음"을 받은 수가 학급에서 눈에 띄게 많은 학생 → 누구에게 받았는지로 학급/여학생/남학생 중심
-      if (x.nrec && x.good >= Math.max(4, mg + Math.max(sg, 1))) {
-        const from = (g) => { const rs = ids.filter((y) => y !== n && gOf(y) === g && R.sDir.has(y + '>' + n)); return rs.length ? rs.filter((y) => R.sDir.get(y + '>' + n) >= 1.5).length / rs.length : 0; };
+      // 관계의 중심 (엄격하게)
+      //  ① 받은 "좋음"이 4명 이상이고 학급 평균보다 표준편차 1.5배 이상 많음
+      //  ② 서로 "좋음"인 친구가 2명 이상
+      //  ③ 남학생(또는 여학생) 중 절반 이상에게 "좋음"을 받음 → 그 성별의 중심, 둘 다면 학급의 중심
+      if (x.nrec && x.good >= Math.max(4, mg + 1.5 * Math.max(sg, 1)) && x.mutual >= 2) {
+        const from = (g) => { const rs = ids.filter((y) => y !== n && gOf(y) === g && R.sDir.has(y + '>' + n)); const k = rs.filter((y) => R.sDir.get(y + '>' + n) >= 1.5).length; return { k, t: rs.length, r: rs.length >= 3 ? k / rs.length : 0 }; };
         const fm = from('남'), ff = from('여');
-        x.center = fm >= 0.4 && ff >= 0.4 ? '학급 관계의 중심' : ff >= fm ? '여학생 관계의 중심' : '남학생 관계의 중심';
+        x.center = fm.r >= 0.5 && ff.r >= 0.5 ? '학급 관계의 중심' : fm.r >= 0.5 ? '남학생 관계의 중심' : ff.r >= 0.5 ? '여학생 관계의 중심' : '';
+        if (x.center) x.centerWhy = `"좋음"을 남학생 ${fm.t}명 중 ${fm.k}명, 여학생 ${ff.t}명 중 ${ff.k}명에게 받았어요 (학급 평균 ${mg.toFixed(1)}명). 서로 "좋음"인 친구 ${x.mutual}명.`;
       }
     });
   }
@@ -770,7 +774,7 @@ function viewSociogram(redraw) {
   let detail = null;
   if (sel != null && ids.includes(sel)) {
     const lvName = (v) => (LEVELS.find((x) => x[0] === v) || [0, '-'])[1];
-    const lvTag = (v) => v ? h('span', { class: 'lv-tag', style: `--c:${LEVELS.find((x) => x[0] === v)[2]}` }, lvName(v)) : h('span', { class: 'muted' }, '-');
+    const lvTag = (v) => v ? h('span', { class: 'lv-tag lv' + v, style: `--c:${LEVELS.find((x) => x[0] === v)[2]}` }, lvName(v)) : h('span', { class: 'muted' }, '-');
     const cellTr = (v, series) => { const m = trendMark(series); return h('td', null, h('span', { class: 'tr-cell' }, lvTag(v), m ? h('span', { class: 'tr-paren' }, '(', m, ')') : null)); };
     const others = roster.filter((f) => f.num !== sel).map((f) => ({ f, r: R.rel(sel, f.num) })).sort((a, b) => (b.r ?? -0.001) - (a.r ?? -0.001));
     const k = (a, b) => (a < b ? a + '-' + b : b + '-' + a);
@@ -784,7 +788,7 @@ function viewSociogram(redraw) {
     const evs = R.useL ? sortedLogs('desc').filter((l) => l._nums.includes(sel)) : [];
     detail = h('div', null, fold('det', `${sel}번 ${stuName(sel)} 학생의 관계`,
       st[sel].flags.length ? h('div', { class: 'banner warn', style: 'margin-bottom:8px' }, '살펴볼 점: ' + st[sel].flags.join(', ')) : null,
-      st[sel].center ? h('div', { class: 'banner', style: 'margin-bottom:8px' }, `${st[sel].center}: 많은 친구들이 "좋음"으로 평가한 학생이에요.`) : null,
+      st[sel].center ? h('div', { class: 'banner', style: 'margin-bottom:8px' }, `${st[sel].center}: ${st[sel].centerWhy || ''}`) : null,
       relRows.length ? h('div', { class: 'table-wrap' }, h('table', { class: 'roster survey' },
         h('thead', null, h('tr', null, ['친구'].concat(R.useS ? ['이 학생이 준 평가', '친구에게 받은 평가'] : [], R.useL ? ['긍정 사건', '부정 사건'] : [], ['종합']).map((t) => h('th', null, t)))),
         h('tbody', null, relRows))) : h('div', { class: 'muted' }, '드러난 관계가 없어요.'),
@@ -800,6 +804,7 @@ function viewSociogram(redraw) {
       h('li', null, h('b', { style: 'color:#f59e0b' }, '주황 테두리'), '는 "살펴볼 점"이 있는 학생이에요.'),
       h('li', null, '교우관계 조사는 좋음 +2, 친해지고 싶음 +1, 그저 그럼 0, 싫음 −2로 바꿔 계산해요. 조사가 여러 번이면 최근 조사를 더 무겁게 봐요.'),
       h('li', null, '누가기록은 같이 나온 횟수가 아니라 사건의 성격(긍정·부정)으로 반영해요.'),
+      h('li', null, '"관계의 중심"은 ① "좋음"을 4명 이상, 학급 평균보다 눈에 띄게 많이 받고 ② 서로 "좋음"인 친구가 2명 이상이며 ③ 남학생(또는 여학생)의 절반 이상에게 "좋음"을 받은 학생이에요. 둘 다 절반 이상이면 학급 관계의 중심이에요.'),
       h('li', null, '학생을 누르면 친구별 평가와 회차별 변화(괄호 안 꺾은선 화살표)를 볼 수 있어요.'),
       h('li', null, '모든 분석은 참고용이에요. 학생을 직접 관찰한 선생님의 판단이 가장 정확해요.'))) }, '관계도 보는 방법');
   const classBtn = h('button', { class: 'sm primary', onclick: () => classReport(R, st, ids, hasSurvey) }, '학급 전체 분석');
