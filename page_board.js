@@ -209,7 +209,7 @@ function place() {
   z = Math.max(0.35, Math.min(z, 1.6));
   B.inner.style.zoom = z;
   B.cur = cur; B.z = z; B.auto = auto;
-  sizeInner();
+  sizeInner(); updateGbox();
 }
 /* 보드는 끝없이 넓음: 화면 밖으로 치운 상자까지 스크롤(또는 바탕을 끌어서)로 볼 수 있게 크기 맞추기 */
 function sizeInner(extraX, extraY) {
@@ -328,16 +328,27 @@ function itemEl(it, ctx) {
       it.type === 'widget' ? null : h('button', { title: '삭제', onclick: () => { if (it.type === 'text' && (it.html || '').trim() && !confirm('이 글상자를 지울까요?')) return; removeItem(it); } }, '✕'));
     const rz = h('div', { class: 'bi-resize', title: '끌어서 크기 바꾸기' });
     el.append(grip, tools, rz);
-    grip.addEventListener('pointerdown', (ev) => { if (document.activeElement && document.activeElement.isContentEditable) document.activeElement.blur(); select(it.id); drag(ev, el, it); });
-    rz.addEventListener('pointerdown', (ev) => { select(it.id); resizeDrag(ev, el, it); });
+    grip.addEventListener('pointerdown', (ev) => {
+      ev.stopPropagation();
+      if (document.activeElement && document.activeElement.isContentEditable) document.activeElement.blur();
+      const add = addKey(ev); if (add || !B.sels.has(it.id)) select(it.id, add);
+      if (B.sels.has(it.id)) drag(ev, el, it);
+    });
+    rz.addEventListener('pointerdown', (ev) => {
+      ev.stopPropagation();
+      if (it.g) { if (!B.sels.has(it.id)) select(it.id); groupResize(ev); } else { select(it.id); resizeDrag(ev, el, it); }
+    });
   }
   el.addEventListener('pointerdown', (ev) => {
     if (ev.target.closest('button')) return;
     // 글상자 안이 아닌 곳(테두리·손잡이)을 누르면 글쓰기를 끝내고 상자를 고른 상태로 → 단축키 사용
     if (!ev.target.closest('.bt-text') && document.activeElement && document.activeElement.isContentEditable) document.activeElement.blur();
-    select(it.id);
+    const add = addKey(ev);
+    if (add) { ev.preventDefault(); select(it.id, true); }
+    else if (!B.sels.has(it.id)) select(it.id);
   });
-  if (B.sel === it.id) el.classList.add('sel');
+  if (it.g) el.classList.add('grp');
+  if (B.sels && B.sels.has(it.id)) el.classList.add('sel');
   return el;
 }
 function editLink(it) {
@@ -360,6 +371,7 @@ function removeItem(it) {
   B.data.items = B.data.items.filter((x) => x !== it);
   Object.values(B.data.layouts).forEach((L) => { delete L[it.id]; });
   if (B.sel === it.id) B.sel = null;
+  B.sels.delete(it.id);
   save(); render();
 }
 /* 모서리를 끌어서 크기 바꾸기 (이미지는 비율 그대로) */
@@ -380,9 +392,95 @@ function resizeDrag(ev, el, it) {
   ev.target.addEventListener('pointermove', mv); ev.target.addEventListener('pointerup', up);
 }
 /* ---------- 고르기 · 단축키 (Ctrl+C / X / V / Z) ---------- */
-function select(id) {
-  B.sel = id;
-  if (B.inner) B.inner.querySelectorAll('.bi').forEach((e) => e.classList.toggle('sel', e.dataset.id === id));
+/* 고르기: 묶음에 든 상자를 누르면 묶음 전체가 골라짐. Shift·Ctrl(또는 "여러 개 고르기")로 더하기/빼기 */
+const addKey = (ev) => !!(ev.shiftKey || ev.ctrlKey || ev.metaKey || B.multi);
+const groupOf = (id) => { const it = B.data.items.find((x) => x.id === id); return it && it.g ? B.data.items.filter((x) => x.g === it.g).map((x) => x.id) : [id]; };
+function select(id, add) {
+  B.sels = B.sels || new Set();
+  if (id == null) { B.sels.clear(); B.sel = null; }
+  else {
+    const ids = groupOf(id);
+    if (add) { const on = B.sels.has(id); ids.forEach((x) => (on ? B.sels.delete(x) : B.sels.add(x))); B.sel = on ? [...B.sels].pop() || null : id; }
+    else { B.sels = new Set(ids); B.sel = id; }
+  }
+  if (B.inner) B.inner.querySelectorAll('.bi').forEach((e) => e.classList.toggle('sel', B.sels.has(e.dataset.id)));
+  updateGbox(); drawGroupBtns();
+}
+const selItems = () => B.data.items.filter((x) => B.sels.has(x.id));
+function groupSel() {
+  const its = selItems(); if (its.length < 2) return toast('묶을 상자를 2개 이상 골라 주세요 (Shift를 누른 채 누르기)');
+  pushUndo(); const g = 'g' + uid(); its.forEach((x) => { x.g = g; });
+  B.multi = false; save(); render(); toast(`${its.length}개를 하나로 묶었어요`);
+}
+function ungroupSel() {
+  const its = selItems().filter((x) => x.g); if (!its.length) return;
+  pushUndo(); its.forEach((x) => { delete x.g; }); save(); render(); toast('묶음을 풀었어요');
+}
+let grpBtns = null;
+function drawGroupBtns() {
+  if (!grpBtns || !B.data || B.data.locked) return;
+  const its = B.data.items.filter((x) => B.sels && B.sels.has(x.id));
+  const same = its.length > 1 && its.every((x) => x.g && x.g === its[0].g);
+  grpBtns.replaceChildren(...[
+    h('button', { class: 'sm' + (B.multi ? ' primary' : ''), title: '켜면 누르는 상자마다 더해서 골라요 (컴퓨터는 Shift를 누른 채 눌러도 돼요)', onclick: () => { B.multi = !B.multi; drawGroupBtns(); } }, B.multi ? '여러 개 고르는 중' : '여러 개 고르기'),
+    its.length > 1 && !same ? h('button', { class: 'sm primary', title: 'Ctrl+G', onclick: groupSel }, `묶기 (${its.length})`) : null,
+    its.some((x) => x.g) ? h('button', { class: 'sm', title: 'Ctrl+Shift+G', onclick: ungroupSel }, '묶음 풀기') : null].filter(Boolean));
+}
+/* 고른 상자들을 감싸는 테두리 + 크기 손잡이 */
+function selBox() {
+  let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity, n = 0;
+  B.inner.querySelectorAll('.bi').forEach((e) => { if (!B.sels.has(e.dataset.id)) return; n++; x1 = Math.min(x1, e.offsetLeft); y1 = Math.min(y1, e.offsetTop); x2 = Math.max(x2, e.offsetLeft + e.offsetWidth); y2 = Math.max(y2, e.offsetTop + e.offsetHeight); });
+  return n ? { x: x1, y: y1, w: x2 - x1, h: y2 - y1, n } : null;
+}
+function updateGbox() {
+  if (!B.inner) return;
+  if (!B.gbox) {
+    const hd = h('div', { class: 'bd-gbox-rz', title: '끌어서 함께 크기 바꾸기' });
+    hd.addEventListener('pointerdown', (ev) => { ev.stopPropagation(); groupResize(ev); });
+    B.gbox = h('div', { class: 'bd-gbox' }, hd);
+  }
+  const b = B.sels && B.sels.size > 1 && !(B.data && B.data.locked) ? selBox() : null;
+  if (!b || b.n < 2) { B.gbox.remove(); return; }
+  if (B.gbox.parentNode !== B.inner) B.inner.append(B.gbox);
+  Object.assign(B.gbox.style, { left: b.x - 6 + 'px', top: b.y - 6 + 'px', width: b.w + 12 + 'px', height: b.h + 12 + 'px' });
+}
+/* 묶음(또는 고른 것들) 크기 함께 바꾸기: 왼쪽 위를 기준으로 같은 비율로 */
+function groupResize(ev) {
+  ev.preventDefault();
+  const L = pin(), z = L._z || 1, box = selBox(); if (!box) return;
+  pushUndo();
+  const parts = selItems().map((it) => {
+    const el = B.inner.querySelector(`[data-id="${it.id}"]`); if (!el) return null;
+    const p = { ...(L[it.id] || { x: el.offsetLeft, y: el.offsetTop, w: el.offsetWidth }) };
+    const body = el.querySelector('.bt-text');
+    return { it, el, body, p, h0: p.h || el.offsetHeight, f0: it.type === 'text' ? ((it.style || {}).size || 20) : 0, inner: body ? [...body.querySelectorAll('[style*="font-size"]')].map((n) => [n, parseFloat(n.style.fontSize) || 0]) : [] };
+  }).filter(Boolean);
+  const sx = ev.clientX, tgt = ev.target; let k = 1;
+  tgt.setPointerCapture(ev.pointerId);
+  const mv = (e) => {
+    k = Math.max(0.2, Math.min(5, (box.w + (e.clientX - sx) / z) / box.w));
+    parts.forEach(({ it, el, body, p, h0, f0, inner }) => {
+      el.style.left = box.x + (p.x - box.x) * k + 'px'; el.style.top = box.y + (p.y - box.y) * k + 'px'; el.style.width = p.w * k + 'px';
+      if (it.type !== 'image') el.style.height = h0 * k + 'px';
+      if (body) { body.style.fontSize = f0 * k + 'px'; inner.forEach(([n, v]) => { if (v) n.style.fontSize = v * k + 'px'; }); }
+      if (it.type === 'widget') fitSub(el, true);
+    });
+    updateGbox();
+  };
+  const up = () => {
+    tgt.removeEventListener('pointermove', mv); tgt.removeEventListener('pointerup', up);
+    parts.forEach(({ it, p, h0, f0 }) => {
+      const np = { x: box.x + (p.x - box.x) * k, y: box.y + (p.y - box.y) * k, w: p.w * k };
+      if (it.type !== 'image') np.h = h0 * k; else it.w = np.w;
+      if (it.type === 'text') {
+        it.style = { ...(it.style || {}), size: Math.max(8, Math.round(f0 * k)) };
+        it.html = (it.html || '').replace(/font-size:\s*([\d.]+)px/g, (m, v) => `font-size: ${Math.max(8, Math.round(Number(v) * k))}px`);
+      }
+      L[it.id] = np;
+    });
+    save(); render();
+  };
+  tgt.addEventListener('pointermove', mv); tgt.addEventListener('pointerup', up);
 }
 function pushUndo() {
   if (!B.data) return;
@@ -394,32 +492,41 @@ function undo() {
   const o = JSON.parse(B.hist.pop()); B.data.items = o.items; B.data.layouts = o.layouts; save(); render();
 }
 function copySel(cut) {
-  const it = B.data.items.find((x) => x.id === B.sel); if (!it) return;
-  const pos = (B.cur || {})[it.id];
-  if (it.type === 'widget' && !cut) return toast('불러온 상자는 복사할 수 없어요. Ctrl+X → Ctrl+V로 맨 위로 올릴 수는 있어요.');
-  B.clip = { item: JSON.parse(JSON.stringify(it)), pos: pos ? { ...pos } : null, cut, layouts: JSON.parse(JSON.stringify(Object.fromEntries(Object.entries(B.data.layouts).map(([k, L]) => [k, L[it.id] || null])))) };
+  const its = selItems(); if (!its.length) return;
+  if (its.length === 1 && its[0].type === 'widget') {
+    if (!cut) return toast('불러온 상자는 복사할 수 없어요. Ctrl+X → Ctrl+V로 맨 위로 올릴 수는 있어요.');
+    B.clip = { moveId: its[0].id }; toast('붙여넣으면(Ctrl+V) 맨 위로 올라와요'); return;
+  }
+  const list = its.filter((x) => x.type !== 'widget');
+  if (list.length < its.length) toast('불러온 상자는 빼고 ' + (cut ? '잘랐어요' : '복사했어요'));
+  B.clip = { cut, list: list.map((it) => ({ item: JSON.parse(JSON.stringify(it)), pos: (B.cur || {})[it.id] ? { ...B.cur[it.id] } : null,
+    layouts: JSON.parse(JSON.stringify(Object.fromEntries(Object.entries(B.data.layouts).map(([k, L]) => [k, L[it.id] || null])))) })) };
   if (cut) {
-    if (it.type === 'widget') { B.clip.moveId = it.id; toast('붙여넣으면(Ctrl+V) 맨 위로 올라와요'); return; }
     pushUndo();
-    B.data.items = B.data.items.filter((x) => x !== it); B.sel = null; save(); render();
-  } else toast('복사했어요. Ctrl+V로 붙여넣으세요');
+    const ids = new Set(list.map((x) => x.id));
+    B.data.items = B.data.items.filter((x) => !ids.has(x.id)); B.sels.clear(); B.sel = null; save(); render();
+  } else if (list.length === its.length) toast(`${list.length > 1 ? list.length + '개를 ' : ''}복사했어요. Ctrl+V로 붙여넣으세요`);
 }
 function pasteClip() {
   const c = B.clip; if (!c) return false;
   pushUndo();
   if (c.moveId) {   // 불러온 상자: 맨 위(맨 뒤 순서)로
     const it = B.data.items.find((x) => x.id === c.moveId);
-    if (it) { B.data.items = B.data.items.filter((x) => x !== it).concat(it); B.sel = it.id; }
+    if (it) { B.data.items = B.data.items.filter((x) => x !== it).concat(it); B.sels = new Set([it.id]); B.sel = it.id; }
     B.clip = null; save(); render(); return true;
   }
-  const it = { ...JSON.parse(JSON.stringify(c.item)), id: c.cut ? c.item.id : uid() };
-  if (B.data.items.some((x) => x.id === it.id)) it.id = uid();
-  B.data.items.push(it);   // 가장 나중에 붙인 것이 맨 위
-  const d = c.cut ? 0 : 20;
-  Object.entries(c.layouts || {}).forEach(([k, p]) => { if (p && B.data.layouts[k]) B.data.layouts[k][it.id] = { ...p, x: p.x + d, y: p.y + d }; });
-  if (c.pos) { const L = pin(); L[it.id] = { ...c.pos, x: c.pos.x + d, y: c.pos.y + d }; }
-  if (c.cut) B.clip = null; else c.pos = c.pos ? { ...c.pos, x: c.pos.x + d, y: c.pos.y + d } : null;
-  B.sel = it.id; save(); render(); return true;
+  const d = c.cut ? 0 : 20, gmap = {}, ids = [];
+  c.list.forEach((e) => {
+    const it = { ...JSON.parse(JSON.stringify(e.item)), id: c.cut ? e.item.id : uid() };
+    if (B.data.items.some((x) => x.id === it.id)) it.id = uid();
+    if (it.g && !c.cut) it.g = gmap[it.g] || (gmap[it.g] = 'g' + uid());
+    B.data.items.push(it); ids.push(it.id);   // 가장 나중에 붙인 것이 맨 위
+    Object.entries(e.layouts || {}).forEach(([k, p]) => { if (p && B.data.layouts[k]) B.data.layouts[k][it.id] = { ...p, x: p.x + d, y: p.y + d }; });
+    if (e.pos) { const L = pin(); L[it.id] = { ...e.pos, x: e.pos.x + d, y: e.pos.y + d }; }
+    if (!c.cut) e.pos = e.pos ? { ...e.pos, x: e.pos.x + d, y: e.pos.y + d } : null;
+  });
+  if (c.cut) B.clip = null;
+  B.sels = new Set(ids); B.sel = ids[ids.length - 1] || null; save(); render(); return true;
 }
 let pasteT = null;
 const boardActive = () => B.panel && B.panel.isConnected && B.data && !B.data.locked && !document.querySelector('.overlay');
@@ -428,13 +535,22 @@ document.addEventListener('keydown', (e) => {
   if (!boardActive() || editing()) return;
   const k = e.key.toLowerCase(), mod = e.ctrlKey || e.metaKey;
   if (mod && k === 'z') { e.preventDefault(); undo(); }
-  else if (mod && k === 'c' && B.sel) { e.preventDefault(); copySel(false); }
-  else if (mod && k === 'x' && B.sel) { e.preventDefault(); copySel(true); }
+  else if (mod && k === 'g' && B.sels && B.sels.size) { e.preventDefault(); e.shiftKey ? ungroupSel() : groupSel(); }
+  else if (mod && k === 'c' && B.sels && B.sels.size) { e.preventDefault(); copySel(false); }
+  else if (mod && k === 'x' && B.sels && B.sels.size) { e.preventDefault(); copySel(true); }
+  else if (k === 'escape' && B.sels && B.sels.size) { B.multi = false; select(null); }
   else if (mod && k === 'v' && B.clip) {
     // 붙여넣기 이벤트가 안 오는 브라우저도 있어서, 잠깐 기다렸다가 직접 붙여넣기 (이미지를 복사해 둔 경우는 이미지 우선)
     clearTimeout(pasteT); pasteT = setTimeout(() => { pasteT = null; pasteClip(); }, 120);
   }
-  else if ((k === 'delete' || k === 'backspace') && B.sel) { const it = B.data.items.find((x) => x.id === B.sel); if (it && it.type !== 'widget') { e.preventDefault(); removeItem(it); } }
+  else if ((k === 'delete' || k === 'backspace') && B.sels && B.sels.size) {
+    const its = selItems().filter((x) => x.type !== 'widget'); if (!its.length) return;
+    e.preventDefault();
+    if (its.length > 1 && !confirm(`고른 상자 ${its.length}개를 지울까요?`)) return;
+    pushUndo(); const ids = new Set(its.map((x) => x.id));
+    B.data.items = B.data.items.filter((x) => !ids.has(x.id)); Object.values(B.data.layouts).forEach((L) => ids.forEach((id) => delete L[id]));
+    B.sels.clear(); B.sel = null; save(); render();
+  }
 });
 document.addEventListener('paste', (e) => {
   if (!boardActive() || editing()) return;
@@ -445,16 +561,20 @@ document.addEventListener('paste', (e) => {
 function drag(ev, el, it) {
   ev.preventDefault(); pushUndo();
   const L = pin(), z = L._z || 1;   // 이때부터 이 화면 크기는 자유 배치
-  const p0 = L[it.id] || { x: el.offsetLeft, y: el.offsetTop, w: el.offsetWidth }, sx = ev.clientX, sy = ev.clientY;
-  el.classList.add('dragging'); el.setPointerCapture(ev.pointerId);
-  let p = { ...p0 };
+  // 고른 상자(묶음) 모두 함께 움직임
+  const parts = B.data.items.filter((x) => B.sels.has(x.id) || x === it).map((x) => {
+    const e = B.inner.querySelector(`[data-id="${x.id}"]`); if (!e) return null;
+    return { x, e, p0: { ...(L[x.id] || { x: e.offsetLeft, y: e.offsetTop, w: e.offsetWidth }) } };
+  }).filter(Boolean);
+  const minX = Math.min(...parts.map((q) => q.p0.x)), minY = Math.min(...parts.map((q) => q.p0.y)), sx = ev.clientX, sy = ev.clientY;
+  parts.forEach((q) => q.e.classList.add('dragging')); el.setPointerCapture(ev.pointerId);
   const C = B.canvas, sl0 = C.scrollLeft, st0 = C.scrollTop;
   let lastE = ev, timer = null, vx = 0, vy = 0;
   const mv = (e) => {
     if (e) lastE = e;
-    const dx = (lastE.clientX - sx + C.scrollLeft - sl0) / z, dy = (lastE.clientY - sy + C.scrollTop - st0) / z;
-    p = { ...p0, x: Math.max(0, p0.x + dx), y: Math.max(0, p0.y + dy) };
-    el.style.left = p.x + 'px'; el.style.top = p.y + 'px';
+    const dx = Math.max(-minX, (lastE.clientX - sx + C.scrollLeft - sl0) / z), dy = Math.max(-minY, (lastE.clientY - sy + C.scrollTop - st0) / z);
+    parts.forEach((q) => { q.p = { ...q.p0, x: q.p0.x + dx, y: q.p0.y + dy }; q.e.style.left = q.p.x + 'px'; q.e.style.top = q.p.y + 'px'; });
+    updateGbox();
     // 화면 가장자리로 끌면 보드가 따라 움직임 (보드는 끝없이 넓음)
     const r = C.getBoundingClientRect(), edge = 30;
     vx = lastE.clientX > r.right - edge ? 14 : lastE.clientX < r.left + edge ? -14 : 0; vy = lastE.clientY > r.bottom - edge ? 14 : lastE.clientY < r.top + edge ? -14 : 0;
@@ -463,8 +583,9 @@ function drag(ev, el, it) {
   };
   const up = () => {
     if (timer) clearInterval(timer);
-    el.removeEventListener('pointermove', mv); el.removeEventListener('pointerup', up); el.classList.remove('dragging');
-    L[it.id] = p; save(); sizeInner();
+    el.removeEventListener('pointermove', mv); el.removeEventListener('pointerup', up);
+    parts.forEach((q) => { q.e.classList.remove('dragging'); if (q.p) L[q.x.id] = q.p; });
+    save(); sizeInner();
   };
   el.addEventListener('pointermove', mv); el.addEventListener('pointerup', up);
 }
@@ -510,7 +631,7 @@ function drawTools() {
 /* ---------- 새 상자 ---------- */
 function addText() {
   const it = { id: uid(), type: 'text', html: '', style: { size: 24, color: '#1f2937' } };
-  pushUndo(); B.data.items.push(it); B.sel = it.id; save(); render();
+  pushUndo(); B.data.items.push(it); B.sel = it.id; B.sels = new Set([it.id]); save(); render();
   setTimeout(() => { const b = B.inner.querySelector(`[data-id="${it.id}"] .bt-text`); if (b) b.focus(); }, 30);
 }
 async function addImage(file) {
@@ -587,9 +708,8 @@ function render() {
   if (!B.panel || !B.panel.isConnected || !B.data) return;
   syncWidgets();
   const d = B.data;
-  B.inner.replaceChildren(...d.items.map((it) => itemEl(it, CTX)),
-    d.items.length ? null : h('div', { class: 'bd-empty muted' }, d.locked ? '보드가 비어 있어요.' : '"+ 글상자"나 "+ 이미지"를 눌러 보세요. 이미지는 복사해서 이 보드에 붙여넣어도(Ctrl+V) 돼요.'));
-  drawHead();
+  B.inner.replaceChildren(...d.items.map((it) => itemEl(it, CTX)), ...(d.items.length ? [] : [h('div', { class: 'bd-empty muted' }, d.locked ? '보드가 비어 있어요.' : '"+ 글상자"나 "+ 이미지"를 눌러 보세요. 이미지는 복사해서 이 보드에 붙여넣어도(Ctrl+V) 돼요.')]));
+  drawHead(); drawGroupBtns();
   requestAnimationFrame(place);
 }
 let headEl = null;
@@ -599,7 +719,7 @@ function drawHead() {
   headEl.replaceChildren(bs.length > 1
       ? h('select', { class: 'bd-sel', title: '보드 고르기', onchange: (e) => switchTo(e.target.value) }, bs.map((b) => h('option', { value: b.id, selected: b.id === B.index.cur }, b.name)))
       : h('b', { class: 'bd-name' }, '학급보드판'),
-    ...(d.locked ? [] : [h('button', { class: 'sm', onclick: addText }, '+ 글상자'), h('button', { class: 'sm', onclick: () => fileIn.click() }, '+ 이미지'), fileIn]),
+    ...(d.locked ? [] : [h('button', { class: 'sm', onclick: addText }, '+ 글상자'), h('button', { class: 'sm', onclick: () => fileIn.click() }, '+ 이미지'), fileIn, grpBtns = h('span', { class: 'bd-grp' })]),
     h('div', { style: 'flex:1' }),
     ...(d.locked ? [] : [h('button', { class: 'sm', onclick: settings }, '설정'), h('button', { class: 'sm', title: '열에 맞춰 다시 정렬', onclick: () => { pushUndo(); d.layouts = {}; save(); render(); } }, '자동정렬'),
       h('button', { class: 'sm', title: '빈 보드를 새로 만들어요 (지금 보드는 그대로 남아요)', onclick: addBoard }, '+ 보드 추가')]),
@@ -607,7 +727,7 @@ function drawHead() {
     h('button', { class: 'sm' + (d.locked ? ' primary' : ''), title: '잠그면 학생이 보드를 고칠 수 없어요', onclick: () => { d.locked = !d.locked; save(); render(); } }, d.locked ? '🔒 잠김' : '잠금'));
 }
 function mount(ctx) {
-  CTX = ctx; B.wOpen = new Set();
+  CTX = ctx; B.wOpen = new Set(); B.sels = new Set(); B.multi = false; B.gbox = null;
   headEl = h('div', { class: 'bd-head' });
   toolsEl = h('div', { class: 'bt-tools', hidden: true });
   B.inner = h('div', { class: 'bd-inner' });
