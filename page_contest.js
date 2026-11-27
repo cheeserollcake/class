@@ -179,45 +179,175 @@ function rulesBody(d, rd, isL, lock) {
       setRow('경기장 수', '경기를 경기장에 차례로 자동 배치해요', stepper(d.courts, 1, 8, (v) => { d.courts = v; rd(); })))];
 }
 
+/* 지난 대회 결과로 학생 실력 점수(0~1) 만들기 — 여러 대회를 고르면 평균 */
+async function ratingsFrom(ids) {
+  const sum = new Map(), cnt = new Map();
+  const add = (num, v) => { sum.set(num, (sum.get(num) || 0) + v); cnt.set(num, (cnt.get(num) || 0) + 1); };
+  for (const id of ids) {
+    const c = await getContest(id).catch(() => null); if (!c || !Object.keys(c.res || {}).length) continue;
+    const score = new Map();
+    if (c.format === 'league') {
+      const rows = standings(c), n = rows.length;
+      rows.forEach((r) => score.set(r.i, n > 1 ? 1 - (r.rank - 1) / (n - 1) : 0.5));
+    } else {
+      const br = bracket(c), R = br.rounds.length, wins = new Map();
+      br.rounds.forEach((ms) => ms.forEach((m) => { if (!m.bye && m.w != null) wins.set(m.w, (wins.get(m.w) || 0) + 1); }));
+      c.entrants.forEach((_, i) => { let w = wins.get(i) || 0; if (br.third && br.third.res) { if ((br.third.res.w === 'a' ? br.third.a : br.third.b) === i) w += 0.5; } score.set(i, R ? Math.min(1, w / R) : 0.5); });
+    }
+    c.entrants.forEach((e, i) => { if (!score.has(i)) return; [...new Set(e.members || [])].forEach((num) => add(num, score.get(i))); });
+  }
+  const out = new Map(); sum.forEach((v, k) => out.set(k, v / cnt.get(k)));
+  return out;
+}
+/* 팀 짜기: 팀 수 × 팀당 인원. 자리가 학생보다 많으면 몇 명은 두 팀에서 뛰고, 적으면 남는 학생은 미배정 */
+function assignTeams(T, ids) {
+  const byNum = (n) => roster().find((s) => s.num === n) || {};
+  const N = T.teams.length, P = perOf(T, ids.length), slots = N * P;
+  const rate = (n) => (T.ratings && T.ratings.has(n) ? T.ratings.get(n) : 0.5);
+  const g = (n) => byNum(n).gender;
+  const mem = T.teams.map(() => []);
+  let order;
+  if (T.method === 'random') order = shuffle(ids);
+  else order = shuffle(ids).sort((a, b) => rate(b) - rate(a));
+  // 성별 조건
+  const groups = T.gmode === 'none' ? [order] : [order.filter((n) => g(n) === '남'), order.filter((n) => g(n) === '여'), order.filter((n) => !['남', '여'].includes(g(n)))];
+  let left = [];
+  if (ids.length > slots) {   // 자리가 모자라면 무작위로 몇 명은 미배정
+    const keep = new Set(shuffle(ids).slice(0, slots));
+    left = ids.filter((n) => !keep.has(n));
+    groups.forEach((gr, k) => { groups[k] = gr.filter((n) => keep.has(n)); });
+  }
+  let teamsFor = () => Array.from({ length: N }, (_, i) => i);
+  if (T.gmode === 'sep' && groups[0].length && groups[1].length && N >= 2) {
+    const tm = Math.min(N - 1, Math.max(1, Math.round(N * groups[0].length / (groups[0].length + groups[1].length))));
+    teamsFor = (k) => (k === 0 ? Array.from({ length: tm }, (_, i) => i) : k === 1 ? Array.from({ length: N - tm }, (_, i) => tm + i) : Array.from({ length: N }, (_, i) => i));
+  }
+  const snake = []; let si = 0;   // 상위·하위 섞기: 1→N, N→1 순서를 계속 이어감 (남녀를 나눠도 이어서)
+  for (let r = 0; r < 200; r++) for (let i = 0; i < N; i++) snake.push(r % 2 ? N - 1 - i : i);
+  groups.forEach((gr, k) => {
+    const tset = teamsFor(k), capK = T.gmode === 'equal' ? Math.ceil(gr.length / tset.length) : Infinity, inK = (i) => mem[i].filter((x) => gr.includes(x)).length;
+    gr.forEach((n) => {
+      let open = tset.filter((i) => mem[i].length < P && (T.method !== 'similar' || inK(i) < capK));
+      if (!open.length) open = tset.filter((i) => mem[i].length < P);
+      if (!open.length) { const t = tset.slice().sort((a, b) => mem[a].length - mem[b].length)[0]; mem[t].push(n); return; }
+      let t;
+      if (T.method === 'similar') t = open.slice().sort((a, b) => mem[b].length - mem[a].length || a - b)[0];   // 한 팀씩 채움
+      else if (T.method === 'mixed') { while (si < snake.length && !open.includes(snake[si])) si++; t = si < snake.length ? snake[si++] : open[0]; }
+      else { const mn = Math.min(...open.map((i) => mem[i].length)); t = shuffle(open.filter((i) => mem[i].length === mn))[0]; }
+      mem[t].push(n);
+    });
+  });
+  // 자리가 남으면 두 번 뛰는 학생으로 채움 (한 팀에 같은 학생은 한 번만, 가장 적게 뛴 학생부터)
+  const times = new Map(); mem.flat().forEach((n) => times.set(n, (times.get(n) || 0) + 1));
+  const avgAll = ids.length ? ids.reduce((a, n) => a + rate(n), 0) / ids.length : 0.5;
+  for (let i = 0; i < N; i++) {
+    while (mem[i].length < P) {
+      const pick = shuffle(ids.filter((n) => !mem[i].includes(n) && !left.includes(n))).sort((a, b) => {
+        const ta = times.get(a) || 0, tb = times.get(b) || 0; if (ta !== tb) return ta - tb;
+        if (T.method === 'random') return 0;
+        const cur = mem[i].reduce((s, n) => s + rate(n), 0), aim = T.method === 'similar' ? cur / Math.max(1, mem[i].length) : avgAll * (mem[i].length + 1) - cur;
+        return Math.abs(rate(a) - aim) - Math.abs(rate(b) - aim);
+      })[0];
+      if (pick == null) break;
+      mem[i].push(pick); times.set(pick, (times.get(pick) || 0) + 1);
+    }
+  }
+  // 상위·하위 섞기: 팀 평균이 가장 높은 팀과 낮은 팀 사이에서 같은 성별끼리 바꿔 차이를 줄임
+  if (T.method === 'mixed') {
+    const avg = (i) => mem[i].reduce((a, n) => a + rate(n), 0) / Math.max(1, mem[i].length);
+    for (let it = 0; it < 300; it++) {
+      const idx = mem.map((_, i) => i).sort((a, b) => avg(b) - avg(a)), A = idx[0], B = idx[idx.length - 1];
+      const gap = avg(A) - avg(B); if (gap < 0.02) break;
+      let best = null;
+      mem[A].forEach((x, ia) => mem[B].forEach((y, ib) => {
+        if (T.gmode !== 'none' && g(x) !== g(y)) return;
+        if (mem[B].includes(x) || mem[A].includes(y)) return;
+        const d = rate(x) - rate(y); if (d <= 0) return;
+        const nA = avg(A) - d / mem[A].length, nB = avg(B) + d / mem[B].length, ng = Math.abs(nA - nB);
+        if (ng < gap - 1e-6 && (!best || ng < best.ng)) best = { ia, ib, ng };
+      }));
+      if (!best) break;
+      const t = mem[A][best.ia]; mem[A][best.ia] = mem[B][best.ib]; mem[B][best.ib] = t;
+    }
+  }
+  T.teams.forEach((t, i) => { t.members = mem[i].sort((a, b) => a - b); });
+  T.pool = left.sort((a, b) => a - b);
+}
+const perOf = (T, n) => Math.max(1, T.per || Math.ceil(n / Math.max(1, T.teams.length)));
+
 /* ---------- 팀 나누기 (만들기·팀 수정에서 같이) ---------- */
 function teamBoard(T, rd, lockCount) {
   const all = roster(), byNum = (n) => all.find((s) => s.num === n);
+  T.method = T.method || 'random'; T.src = T.src || new Set();
   const inTeam = new Set(T.teams.flatMap((t) => t.members));
-  T.pool = T.pool.filter((n) => !inTeam.has(n) && byNum(n));
-  const setCount = (k) => { T.teams = k > T.teams.length ? [...T.teams, ...Array.from({ length: k - T.teams.length }, (_, i) => ({ id: uid(), name: `${T.teams.length + i + 1}팀`, members: [] }))] : T.teams.slice(0, k); if (k < T.teams.length) return; rd(); };
-  const moveTo = (to, n) => { T.teams.forEach((t) => { t.members = t.members.filter((x) => x !== n); }); T.pool = T.pool.filter((x) => x !== n); if (to === 'pool') T.pool.push(n); else { const t = T.teams.find((x) => x.id === to); if (t) t.members.push(n); } T.pick = null; rd(); };
-  const randomAssign = () => {
-    const ids = [...T.teams.flatMap((t) => t.members), ...T.pool], N = T.teams.length, mem = T.teams.map(() => []);
-    const ms = shuffle(ids.filter((i) => (byNum(i) || {}).gender === '남')), fs = shuffle(ids.filter((i) => (byNum(i) || {}).gender === '여')), rest = shuffle(ids.filter((i) => !['남', '여'].includes((byNum(i) || {}).gender)));
-    const put = (id, from, to) => { let best = [], min = 1e9; for (let i = from; i < to; i++) { if (mem[i].length < min) { min = mem[i].length; best = [i]; } else if (mem[i].length === min) best.push(i); } mem[best[Math.floor(Math.random() * best.length)]].push(id); };
-    if (T.gmode === 'sep' && N >= 2 && ms.length && fs.length) { const tm = Math.min(N - 1, Math.max(1, Math.round(N * ms.length / (ms.length + fs.length)))); ms.forEach((id) => put(id, 0, tm)); fs.forEach((id) => put(id, tm, N)); }
-    else if (T.gmode === 'none') shuffle([...ms, ...fs]).forEach((id) => put(id, 0, N));
-    else { ms.forEach((id) => put(id, 0, N)); fs.forEach((id) => put(id, 0, N)); }
-    rest.forEach((id) => put(id, 0, N));
-    T.teams.forEach((t, i) => { t.members = mem[i].sort((a, b) => a - b); }); T.pool = []; rd();
+  T.pool = [...new Set(T.pool)].filter((n) => !inTeam.has(n) && byNum(n));
+  const people = [...new Set([...T.teams.flatMap((t) => t.members), ...T.pool])].filter((n) => byNum(n));
+  const N = T.teams.length, P = perOf(T, people.length), slots = N * P;
+  // 팀 수를 줄이면 빠지는 팀의 학생은 미배정으로 돌아감 (학생이 사라지지 않게)
+  const setCount = (k) => {
+    if (k > T.teams.length) T.teams = [...T.teams, ...Array.from({ length: k - T.teams.length }, (_, i) => ({ id: uid(), name: `${T.teams.length + i + 1}팀`, members: [] }))];
+    else { const gone = T.teams.slice(k); T.teams = T.teams.slice(0, k); const still = new Set(T.teams.flatMap((t) => t.members)); gone.forEach((t) => t.members.forEach((n) => { if (!still.has(n) && !T.pool.includes(n)) T.pool.push(n); })); }
+    rd();
   };
-  const gc = (ids) => { const g = (k) => ids.filter((n) => (byNum(n) || {}).gender === k).length; return h('span', { class: 'cz-gc' }, h('b', { class: 'm' }, '남 ' + g('남')), h('b', { class: 'f' }, '여 ' + g('여'))); };
-  const chip = (n) => { const s = byNum(n); if (!s) return null;
-    const el = h('span', { class: 'cz-chip ' + gcls(s.gender) + (T.pick === n ? ' pick' : ''), draggable: 'true', onclick: (e) => { e.stopPropagation(); T.pick = T.pick === n ? null : n; rd(); } }, h('small', null, s.num), s.name);
-    el.addEventListener('dragstart', (e) => { e.dataTransfer.setData('text/plain', String(n)); });
+  // from: 'pool' 또는 팀 id. 중복 넣기를 켜면 팀→팀이 복사
+  const moveTo = (to, n, from) => {
+    const src = from || T.pickFrom;
+    const tgt = T.teams.find((x) => x.id === to);
+    if (tgt && tgt.members.includes(n)) { T.pick = null; return rd(); }
+    if (!(T.dup && src !== 'pool' && to !== 'pool')) {
+      if (src === 'pool') T.pool = T.pool.filter((x) => x !== n);
+      else { const s = T.teams.find((x) => x.id === src); if (s) { const i = s.members.indexOf(n); if (i >= 0) s.members.splice(i, 1); } }
+    }
+    if (to === 'pool') { if (!T.teams.some((t) => t.members.includes(n)) && !T.pool.includes(n)) T.pool.push(n); }
+    else if (tgt) tgt.members.push(n);
+    T.pick = null; T.pickFrom = null; rd();
+  };
+  const runAssign = () => {
+    if (T.method !== 'random' && !T.src.size) return toast('실력으로 짜려면 아래에서 지난 대회를 하나 이상 골라 주세요', true);
+    assignTeams(T, people); rd();
+  };
+  const gc = (ids) => { const gg = (k) => ids.filter((n) => (byNum(n) || {}).gender === k).length; return h('span', { class: 'cz-gc' }, h('b', { class: 'm' }, '남 ' + gg('남')), h('b', { class: 'f' }, '여 ' + gg('여'))); };
+  const times = new Map(); T.teams.forEach((t) => t.members.forEach((n) => times.set(n, (times.get(n) || 0) + 1)));
+  const chip = (n, from) => { const s = byNum(n); if (!s) return null;
+    const r = T.ratings && T.ratings.has(n) ? T.ratings.get(n) : null;
+    const el = h('span', { class: 'cz-chip ' + gcls(s.gender) + (T.pick === n && T.pickFrom === from ? ' pick' : '') + ((times.get(n) || 0) > 1 ? ' twice' : ''), draggable: 'true', title: (times.get(n) || 0) > 1 ? '두 팀에서 뛰어요' : '',
+      onclick: (e) => { e.stopPropagation(); if (T.pick === n && T.pickFrom === from) { T.pick = null; T.pickFrom = null; } else { T.pick = n; T.pickFrom = from; } rd(); } },
+      h('small', null, s.num), s.name, r != null && T.method !== 'random' ? h('i', { class: 'cz-rate' }, '★'.repeat(Math.max(1, Math.round(r * 4) + 1))) : null);
+    el.addEventListener('dragstart', (e) => { e.dataTransfer.setData('text/plain', n + '|' + from); });
     return el; };
   const drop = (el, to) => {
     el.addEventListener('dragover', (e) => { e.preventDefault(); el.classList.add('drop'); });
     el.addEventListener('dragleave', () => el.classList.remove('drop'));
-    el.addEventListener('drop', (e) => { e.preventDefault(); el.classList.remove('drop'); const n = Number(e.dataTransfer.getData('text/plain')); if (n) moveTo(to, n); });
+    el.addEventListener('drop', (e) => { e.preventDefault(); el.classList.remove('drop'); const [n, from] = e.dataTransfer.getData('text/plain').split('|'); if (Number(n)) moveTo(to, Number(n), from); });
     el.addEventListener('click', () => { if (T.pick != null) moveTo(to, T.pick); });
     return el; };
+  // 지난 대회 목록 (결과가 있는 것)
+  const past = (C.index ? C.index.list : []).filter((x) => x.done > 0 && x.unit !== 'class');
+  const pickSrc = async (id) => { T.src.has(id) ? T.src.delete(id) : T.src.add(id); T.ratings = T.src.size ? await ratingsFrom([...T.src]) : null; rd(); };
+  const dupN = Math.max(0, slots - people.length), leftN = Math.max(0, people.length - slots);
   return h('div', null,
-    lockCount ? null : setRow('팀 수', '', stepper(T.teams.length, 2, 32, setCount)),
-    h('div', { class: 'cz-auto' }, seg(T.gmode, [['equal', '남녀 동비율'], ['sep', '남녀 따로'], ['none', '성별 무시']], (v) => { T.gmode = v; rd(); }),
-      h('button', { class: 'sm primary', type: 'button', onclick: randomAssign, title: '누를 때마다 다시 섞어요' }, '🎲 랜덤 배정'),
-      h('button', { class: 'sm', type: 'button', onclick: () => { T.pool = [...T.pool, ...T.teams.flatMap((t) => t.members)]; T.teams.forEach((t) => { t.members = []; }); rd(); } }, '모두 빼기')),
-    h('div', { class: 'muted', style: 'font-size:13px;margin:6px 0' }, '이름을 누른 뒤 팀 칸을 누르거나, 끌어서 놓으면 옮겨져요. (지정 배정)'),
+    h('div', { class: 'cz-sizes' },
+      lockCount ? h('span', { class: 'muted' }, `팀 ${N}개 (대진이 정해져서 바꿀 수 없어요)`) : setRow('팀 수', '', stepper(N, 2, 32, setCount)),
+      setRow('팀당 인원', T.per ? '' : '자동 (학생 수 ÷ 팀 수)', h('span', { class: 'cz-inline' }, stepper(P, 1, 40, (v) => { T.per = v; rd(); }), T.per ? h('button', { class: 'sm ghost', type: 'button', onclick: () => { T.per = null; rd(); } }, '자동') : null))),
+    h('div', { class: 'cz-calc' + (dupN ? ' warn' : '') }, `학생 ${people.length}명 · ${N}팀 × ${P}명 = ${slots}자리`,
+      dupN ? ` → ${dupN}명은 두 팀에서 뛰어요 (팀 짜기를 누르면 자동으로 정해요)` : leftN ? ` → ${leftN}명은 자리가 없어 미배정으로 남아요` : ' → 딱 맞아요'),
+    h('div', { class: 'cz-auto' },
+      h('span', { class: 'muted' }, '짜는 방식'), seg(T.method, [['random', '랜덤'], ['similar', '실력 비슷한 끼리'], ['mixed', '상위·하위 섞어서']], async (v) => { T.method = v; rd(); }),
+      h('span', { class: 'muted' }, '성별'), seg(T.gmode, [['equal', '남녀 동비율'], ['sep', '남녀 따로'], ['none', '성별 무시']], (v) => { T.gmode = v; rd(); }),
+      h('button', { class: 'sm primary', type: 'button', onclick: runAssign, title: '누를 때마다 다시 짜요' }, '🎲 팀 짜기'),
+      h('button', { class: 'sm', type: 'button', onclick: () => { T.pool = people.slice(); T.teams.forEach((t) => { t.members = []; }); rd(); } }, '모두 빼기')),
+    T.method !== 'random' ? h('div', { class: 'cz-src' }, h('b', null, '실력 기준으로 쓸 지난 대회'),
+      past.length ? h('div', { class: 'cz-chips' }, past.map((x) => h('button', { type: 'button', class: 'cz-srcchip' + (T.src.has(x.id) ? ' on' : ''), onclick: () => pickSrc(x.id) }, `${x.name} (${x.format === 'league' ? '리그' : '토너먼트'} · ${x.done}경기)`)))
+        : h('span', { class: 'muted' }, '결과가 있는 지난 대회가 없어요. 먼저 대회를 치르고 기록해 주세요.'),
+      h('div', { class: 'muted', style: 'font-size:12px;margin-top:4px' }, T.method === 'similar' ? '순위가 비슷한 학생끼리 같은 팀이 돼요. (★가 많을수록 지난 대회 성적이 좋아요)' : '팀마다 상위·중위·하위 학생이 고르게 섞여 팀 실력이 비슷해져요. (★가 많을수록 지난 대회 성적이 좋아요)')) : null,
+    h('div', { class: 'cz-auto' }, h('label', { class: 'row', style: 'gap:6px;font-size:13px;cursor:pointer' }, h('input', { type: 'checkbox', checked: !!T.dup, onchange: (e) => { T.dup = e.target.checked; } }), '중복 넣기: 팀에 있는 학생을 다른 팀으로 옮기면 복사돼요 (두 팀에서 뛰기)'),
+      h('span', { class: 'muted', style: 'font-size:12px' }, '이름을 누른 뒤 팀 칸을 누르거나 끌어서 놓으면 옮겨져요. (지정 배정)')),
     drop(h('div', { class: 'cz-pool' }, h('div', { class: 'cz-pool-h' }, h('b', null, '미배정'), h('span', { class: 'muted' }, `${T.pool.length}명`), gc(T.pool)),
-      T.pool.length ? h('div', { class: 'cz-chips' }, T.pool.map(chip)) : h('span', { class: 'muted', style: 'font-size:13px' }, '모두 팀에 들어갔어요')), 'pool'),
-    h('div', { class: 'cz-teams' }, T.teams.map((t, i) => drop(h('div', { class: 'cz-team' + (T.pick != null ? ' target' : '') },
-      h('div', { class: 'cz-team-h' }, h('input', { value: t.name, maxlength: 12, 'aria-label': `${i + 1}번째 팀 이름`, onclick: (e) => e.stopPropagation(), oninput: (e) => { t.name = e.target.value; } }), gc(t.members)),
-      t.members.length ? h('div', { class: 'cz-chips' }, t.members.map(chip)) : h('em', { class: 'muted' }, '여기에 학생을 넣어요')), t.id))));
+      T.pool.length ? h('div', { class: 'cz-chips' }, T.pool.map((n) => chip(n, 'pool'))) : h('span', { class: 'muted', style: 'font-size:13px' }, '모두 팀에 들어갔어요')), 'pool'),
+    h('div', { class: 'cz-teams' }, T.teams.map((t, i) => drop(h('div', { class: 'cz-team' + (T.pick != null ? ' target' : '') + (t.members.length !== P ? ' off' : '') },
+      h('div', { class: 'cz-team-h' }, h('input', { value: t.name, maxlength: 12, 'aria-label': `${i + 1}번째 팀 이름`, onclick: (e) => e.stopPropagation(), oninput: (e) => { t.name = e.target.value; } }), h('span', { class: 'cz-tcnt' + (t.members.length !== P ? ' bad' : '') }, `${t.members.length}/${P}`), gc(t.members),
+        T.ratings && T.method !== 'random' && t.members.length ? h('span', { class: 'cz-tavg' }, '평균 ★' + (t.members.reduce((a, n) => a + (T.ratings.has(n) ? T.ratings.get(n) : 0.5), 0) / t.members.length * 4 + 1).toFixed(1)) : null),
+      t.members.length ? h('div', { class: 'cz-chips' }, t.members.map((n) => chip(n, t.id))) : h('em', { class: 'muted' }, '여기에 학생을 넣어요')), t.id))));
 }
 
 /* ---------- 대회 만들기 ---------- */
@@ -302,7 +432,7 @@ function editDialog(c, onSave) {
 }
 
 /* ---------- 경기 결과 적기 ---------- */
-function resultDialog(c, m, nm, onSave) {
+function resultDialog(c, m, nm, onSave, onDelete) {
   const r = m.res, needWinner = c.format !== 'league' || !c.draw;
   let sa = r && r.sa != null ? r.sa : 0, sb = r && r.sb != null ? r.sb : 0;
   const max = c.scoring === 'sets' ? Math.ceil(c.sets / 2) : 999, goal = c.scoring === 'sets' ? max : c.target || 0;
@@ -327,10 +457,18 @@ function resultDialog(c, m, nm, onSave) {
         h('p', { class: 'muted', style: 'text-align:center;margin:10px 0 0;font-size:13px' }, c.scoring === 'sets' ? `${c.sets}세트 경기 · ${max}세트 먼저` : c.target ? `목표 ${c.target}점 · '승리' 버튼을 누르면 이긴 쪽에 목표 점수가 들어가요` : ' '),
         sa === sb && needWinner ? h('p', { class: 'muted', style: 'text-align:center;color:var(--danger);margin:4px 0 0;font-size:13px' }, '비기면 저장할 수 없어요. 이긴 쪽 점수를 더 높게 적어 주세요.') : null].filter(Boolean));
     }
-    foot.replaceChildren(h('div', null, r ? h('button', { class: 'danger', onclick: () => done(null) }, '기록 지우기') : null),
+    foot.replaceChildren(h('div', { class: 'row', style: 'gap:6px' }, r ? h('button', { class: 'danger', onclick: () => done(null) }, '기록 지우기') : null,
+      onDelete ? h('button', { class: 'ghost', title: '이 경기를 일정에서 아예 빼요', onclick: () => { if (!confirm('이 경기를 일정에서 삭제할까요? 기록도 함께 지워져요.')) return; dl.close(); onDelete(); } }, '경기 삭제') : null),
       h('div', { class: 'row', style: 'gap:6px' }, h('button', { onclick: dl.close }, '취소'), c.scoring === 'wdl' ? null : h('button', { class: 'primary', disabled: sa === sb && needWinner, onclick: () => done({ sa, sb, w: sa > sb ? 'a' : sb > sa ? 'b' : 'd' }) }, '저장')));
   };
   rd();
+}
+/* 리그 경기 하나를 일정에서 빼기 (기록 번호를 다시 맞춤) */
+function deleteMatch(c, key) {
+  const idx = Number(String(key).slice(1)); if (!(idx >= 0) || !c.matches[idx]) return;
+  const res = {}, live = {};
+  c.matches.forEach((m, j) => { if (j === idx) return; const nk = 'm' + (j < idx ? j : j - 1); if (c.res['m' + j]) res[nk] = c.res['m' + j]; if (c.live['m' + j]) live[nk] = true; });
+  c.matches.splice(idx, 1); c.res = res; c.live = live;
 }
 /* 결과 적용 (토너먼트는 이 경기에 달린 다음 라운드 기록 정리) */
 function applyRes(c, m, res) {
@@ -352,7 +490,7 @@ function compView(c, redraw) {
   const total = list.length, played = list.filter((x) => x.res).length, pct = total ? Math.round(played / total * 100) : 0;
   const br = isL ? null : bracket(c), champ = br && br.final.w != null ? nm(br.final.w) : null;
   const upd = () => { save(c); redraw(); };
-  const open = (x) => { if (x.a != null && x.b != null && !x.bye) resultDialog(c, x, nm, (res) => { applyRes(c, x, res); upd(); }); };
+  const open = (x) => { if (x.a != null && x.b != null && !x.bye) resultDialog(c, x, nm, (res) => { applyRes(c, x, res); upd(); }, isL ? () => { deleteMatch(c, x.key); upd(); toast('경기를 삭제했어요'); } : null); };
   const toggle = (kind, i) => {
     if (c[kind][i]) delete c[kind][i]; else c[kind][i] = true;
     if (kind === 'big' && !isL && !Object.keys(c.res).length) c.slots = makeSlots(arrangeIds(seedOrder(c.slots), c.big));
@@ -382,6 +520,7 @@ function compView(c, redraw) {
         h('span', { class: 'cz-badge' }, isL ? (c.legs === 2 ? '리그 · 두 번씩' : '리그') : '토너먼트'), h('span', { class: 'cz-badge' }, UNIT[c.unit]),
         h('span', { class: 'cz-badge' }, SCORING.find((x) => x[0] === c.scoring)[1] + (c.target ? ` · ${c.target}점` : c.scoring === 'sets' ? ` · ${c.sets}세트` : '')),
         isL ? h('span', { class: 'cz-badge' }, `승점 ${c.pts.w}${c.draw ? '·' + c.pts.d : ''}·${c.pts.l}`) : null, h('span', { class: 'cz-badge' }, `경기장 ${c.courts}`),
+        h('button', { class: 'sm primary', title: '비밀번호를 넣으면 경기 기록만 할 수 있는 화면이 열려요', onclick: () => recEnter(c.id, redraw) }, '📝 기록 모드'),
         !isL ? h('button', { class: 'sm', title: '대진표 모양 바꾸기', onclick: () => { C.bmode = C.bmode === 'h' ? 'v' : 'h'; saveView(); redraw(); } }, C.bmode === 'h' ? '⇄ 가로' : '⇅ 세로') : null,
         !played ? h('button', { class: 'sm', title: isL ? '경기 순서를 무작위로 다시 짜요' : '대진을 무작위로 다시 짜요', onclick: shuffleIt }, '🔀 대진표 섞기') : null,
         h('button', { class: 'sm', onclick: () => editDialog(c, upd) }, '⚙ 설정'),
@@ -503,6 +642,74 @@ function archiveBox(redraw) {
   };
   rd();
 }
+
+/* ---------- 기록 모드: 비밀번호로 들어가고 나감. 경기 일정만 보이고 기록만 할 수 있음 ---------- */
+const REC_KEY = 'contest_rec', RW = [560, 720, 900, 1100, 1300, 0];
+function pwAsk(title, desc) {
+  return new Promise((resolve) => {
+    const input = h('input', { type: 'password', placeholder: '비밀번호', autocomplete: 'off' }), err = h('div', { class: 'err' });
+    const done = (v) => { ov.remove(); resolve(v); };
+    const go = async () => {
+      btn.disabled = true; err.textContent = '';
+      try { await APP.api('unlock', { pw: input.value }); done(true); } catch (e) { err.textContent = errMsg(e); btn.disabled = false; input.select(); }
+    };
+    const btn = h('button', { class: 'primary', onclick: go }, '확인');
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); if (e.key === 'Escape') done(false); });
+    const ov = h('div', { class: 'overlay', style: 'z-index:120' }, h('div', { class: 'modal' }, h('h3', null, title), h('div', { class: 'muted' }, desc), input, err, h('div', { class: 'row' }, h('button', { onclick: () => done(false) }, '취소'), btn)));
+    document.body.append(ov); input.focus();
+  });
+}
+async function recEnter(id, redraw) {
+  if (!(await pwAsk('기록 모드로 들어가기', '선생님 비밀번호를 넣어 주세요. 기록 모드에서는 경기 결과만 적을 수 있어요.'))) return;
+  try { localStorage.setItem(REC_KEY, id); } catch (e) { /* 저장 안 됨 */ }
+  recOpen(id, redraw);
+}
+async function recOpen(id, redraw) {
+  document.querySelectorAll('.rec-layer').forEach((x) => x.remove());
+  if (!C.index) await loadIndex();
+  const c = await getContest(id); if (!c) { try { localStorage.removeItem(REC_KEY); } catch (e) { /* 없음 */ } return; }
+  const layer = h('div', { class: 'rec-layer' }); document.body.append(layer); document.body.classList.add('rec-on');
+  let wi = 2; try { wi = Math.max(0, Math.min(RW.length - 1, Number(localStorage.getItem('rec_w') ?? 2))); } catch (e) { /* 기본 */ }
+  const nm = (i) => (i != null && c.entrants[i] ? c.entrants[i].name : '미정');
+  const draw = () => {
+    const isL = c.format === 'league', list = allGames(c), p = progress(c);
+    const ready = list.filter((x) => !x.res && x.a != null && x.b != null && !x.bye);
+    const wait = list.filter((x) => !x.res && (x.a == null || x.b == null));
+    const done = list.filter((x) => x.res);
+    const open = (x) => { if (x.a == null || x.b == null) return; resultDialog(c, x, nm, (res) => { applyRes(c, x, res); save(c); draw(); }); };
+    const row = (x, k, kind) => {
+      const lv = c.live[x.key] && !x.res;
+      return h('div', { class: 'rec-row ' + kind + (lv ? ' live' : '') + (k === 0 && kind === 'ready' ? ' next' : ''), onclick: () => open(x) },
+        h('div', { class: 'rec-meta' }, k === 0 && kind === 'ready' ? h('span', { class: 'rec-next' }, '다음 경기') : null,
+          h('span', { class: 'cz-live' + (lv ? ' on' : ''), onclick: (e) => { e.stopPropagation(); if (kind !== 'ready') return; if (c.live[x.key]) delete c.live[x.key]; else c.live[x.key] = true; save(c); draw(); } }, lv ? '경기 중' : `${x.no}경기`),
+          h('span', { class: 'cz-badge' }, isL ? `${x.r + 1}R` : x.name), c.courts > 1 && x.court ? h('span', { class: 'cz-badge' }, `${x.court}경기장`) : null),
+        h('b', { class: 'rec-a' + (x.res && x.res.w === 'a' ? ' win' : '') + (c.out[x.a] ? ' out' : '') }, nm(x.a)),
+        h('span', { class: 'rec-sc' + (x.res ? '' : ' vs') }, scText(c, x.res)),
+        h('b', { class: 'rec-b' + (x.res && x.res.w === 'b' ? ' win' : '') + (c.out[x.b] ? ' out' : '') }, nm(x.b)));
+    };
+    const W = RW[wi];
+    layer.replaceChildren(h('div', { class: 'rec-in', style: W ? `max-width:${W}px` : 'max-width:none' },
+      h('div', { class: 'rec-head' },
+        h('div', { class: 'rec-title' }, h('span', { class: 'cz-badge' }, '📝 기록 모드'), h('b', null, c.name), h('span', { class: 'muted' }, `${p.done} / ${p.total}경기`)),
+        h('div', { class: 'rec-tools' },
+          h('span', { class: 'muted', style: 'font-size:12px' }, '화면 너비'),
+          h('button', { class: 'sm', disabled: wi === 0, onclick: () => { wi--; try { localStorage.setItem('rec_w', wi); } catch (e) { /* 저장 안 됨 */ } draw(); } }, '◀ 좁게'),
+          h('button', { class: 'sm', disabled: wi === RW.length - 1, onclick: () => { wi++; try { localStorage.setItem('rec_w', wi); } catch (e) { /* 저장 안 됨 */ } draw(); } }, '넓게 ▶'),
+          h('button', { class: 'sm danger', onclick: async () => {
+            if (!(await pwAsk('기록 모드 나가기', '나가려면 선생님 비밀번호를 넣어 주세요.'))) return;
+            try { localStorage.removeItem(REC_KEY); } catch (e) { /* 없음 */ }
+            layer.remove(); document.body.classList.remove('rec-on'); if (redraw) redraw(); else if (APP.renderPage) APP.renderPage();
+          } }, '나가기 🔒'))),
+      h('div', { class: 'rec-prog' }, bar(p.pct), h('b', null, p.pct + '%')),
+      ready.length ? [h('div', { class: 'rec-h' }, `다가올 경기 ${ready.length}`), h('div', { class: 'rec-list' }, ready.map((x, k) => row(x, k, 'ready')))] : h('div', { class: 'rec-empty' }, p.total && p.done === p.total ? '🏁 모든 경기가 끝났어요!' : '지금 할 수 있는 경기가 없어요.'),
+      wait.length ? [h('div', { class: 'rec-h' }, `대기 (앞 경기 결과를 기다려요) ${wait.length}`), h('div', { class: 'rec-list' }, wait.map((x, k) => row(x, k, 'wait')))] : null,
+      done.length ? [h('div', { class: 'rec-h' }, `끝난 경기 ${done.length}`), h('div', { class: 'rec-list' }, done.slice().reverse().map((x, k) => row(x, k, 'done')))] : null,
+      h('p', { class: 'muted', style: 'font-size:12px;text-align:center;margin:16px 0' }, '경기를 누르면 결과를 적을 수 있어요. 끝난 경기는 아래로 내려가요. "N경기"를 누르면 경기 중 표시가 켜져요.')));
+  };
+  draw();
+}
+/* 새로고침해도 기록 모드가 풀리지 않게 */
+APP.contestRecResume = () => { let id = null; try { id = localStorage.getItem(REC_KEY); } catch (e) { /* 없음 */ } if (id) recOpen(id, null).catch(() => {}); };
 
 /* ---------- 페이지 ---------- */
 APP.pages.contest = () => {

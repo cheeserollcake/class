@@ -214,6 +214,7 @@ async function startApp() {
     S.email = j.email; S.roster = j.roster || []; S.seat = normSeat(j.seat); S.boards = j.boards || []; S.defaultPw = j.defaultPw;
     if (!S.curBoard && S.boards.length) S.curBoard = S.boards[0].id;
     renderShell(); loadIcon();
+    if (APP.contestRecResume) APP.contestRecResume();
   } catch (e) {
     if (DEMO) { root.textContent = errMsg(e); return; }
     showLogin(errMsg(e));
@@ -273,7 +274,7 @@ function renderShell() {
   const root = $('#app'); root.replaceChildren();
   let closed = false; try { closed = localStorage.getItem('side_closed') === '1'; } catch (e) { /* 저장 안 됨 */ }
   const setClosed = (c) => {
-    nav.classList.toggle('closed', c); fab.classList.toggle('show', c);
+    nav.classList.toggle('closed', c); fab.classList.toggle('show', c); document.body.classList.toggle('nav-off', c);
     try { localStorage.setItem('side_closed', c ? '1' : '0'); } catch (e) { /* 저장 안 됨 */ }
     window.dispatchEvent(new Event('resize'));
   };
@@ -289,6 +290,7 @@ function renderShell() {
     h('div', { class: 'who' }, DEMO ? '데모 모드' : S.email),
     DEMO ? null : h('button', { class: 'ghost sm', onclick: logout }, '로그아웃'), togM);
   root.append(h('div', { class: 'shell' }, nav, h('main', { class: 'main', id: 'main' })), fab);
+  document.body.classList.toggle('nav-off', closed);
   renderPage();
 }
 function go(id) {

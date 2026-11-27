@@ -41,10 +41,19 @@ function evalTotal(ev, d, n) {
 const evalCols = (ev) => (ev.type === 'answers' ? ev.items.map((_, i) => `${i + 1}번`) : colsOf(ev).map((c) => c.name));
 const evalCells = (ev, d, n) => (ev.type === 'answers' ? ev.items.map((_, i) => ((d.answers || {})[n] || [])[i] || '') : colsOf(ev).map((c) => { const v = rowOf(d, n)[c.id]; return v == null ? '' : v; }));
 /* 기본 평가: 기초학력평가 (삭제 불가, 문항 응답 자동 채점) */
-const BASE_ID = 'base';
+const BASE_ID = 'base', BASE2_ID = 'base2', DICT_ID = 'dict';
+const baseItems = () => Array.from({ length: 20 }, () => ({ ans: '', pts: 5 }));
 function ensureBaseEval() {
-  if (GR.cfg.evals.some((e) => e.id === BASE_ID)) return;
-  GR.cfg.evals.unshift({ id: BASE_ID, name: '기초학력평가', type: 'answers', fixed: true, total: 100, items: Array.from({ length: 20 }, () => ({ ans: '', pts: 5 })), cut: null, created: 0 });
+  const E = GR.cfg.evals;
+  let b = E.find((e) => e.id === BASE_ID);
+  if (!b) { b = { id: BASE_ID, type: 'answers', total: 100, items: baseItems(), cut: null, created: 0 }; E.unshift(b); }
+  Object.assign(b, { fixed: true, group: 'base', sub: b.sub || '국어' }); b.name = `기초학력평가 ${b.sub}`;
+  let b2 = E.find((e) => e.id === BASE2_ID);
+  if (!b2) { b2 = { id: BASE2_ID, type: 'answers', total: 100, items: baseItems(), cut: null, created: 0 }; E.splice(E.indexOf(b) + 1, 0, b2); }
+  Object.assign(b2, { fixed: true, group: 'base', sub: b2.sub || '수학' }); b2.name = `기초학력평가 ${b2.sub}`;
+  let dc = E.find((e) => e.id === DICT_ID) || E.find((e) => e.type === 'score' && e.name.trim() === '받아쓰기');
+  if (!dc) { dc = { id: DICT_ID, name: '받아쓰기', type: 'score', max: 100, cut: null, items: [], cols: [{ id: 'c1', name: '1회' }], created: 0 }; E.splice(E.indexOf(b2) + 1, 0, dc); }
+  dc.fixed = true;
 }
 async function ensure() {
   if (GR.cfg) return;
@@ -230,7 +239,11 @@ async function perfEval(redraw) {
    ===================================================== */
 async function viewEtc(redraw) {
   const evs = GR.cfg.evals;
-  const chips = h('div', { class: 'chips' }, evs.map((e) => h('button', { class: 'chip' + (e.id === GR.evalId && !GR.creating ? ' active' : ''), onclick: () => { GR.evalId = e.id; GR.creating = false; GR.editing = false; redraw(); } }, e.name || '(이름 없음)')),
+  const curEv = evs.find((e) => e.id === GR.evalId);
+  const chips = h('div', { class: 'chips' }, evs.filter((e) => !(e.group === 'base' && e.id !== BASE_ID)).map((e) => {
+    const on = !GR.creating && (e.id === GR.evalId || (e.group === 'base' && curEv && curEv.group === 'base'));
+    return h('button', { class: 'chip' + (on ? ' active' : ''), onclick: () => { GR.evalId = e.group === 'base' && curEv && curEv.group === 'base' ? curEv.id : e.id; GR.creating = false; GR.editing = false; redraw(); } }, e.group === 'base' ? '기초학력평가' : e.name || '(이름 없음)', e.fixed ? h('span', { class: 'chip-lock', title: '기본 평가 (삭제 불가)' }, ' 🔒') : null);
+  }),
     h('button', { class: 'chip add', onclick: () => { GR.creating = true; GR.editing = false; redraw(); } }, '+ 평가 추가'));
   if (GR.creating) return h('div', null, chips, evalForm(null, redraw));
   const ev = evs.find((e) => e.id === GR.evalId) || evs[0];
@@ -250,8 +263,11 @@ function evalForm(ev, redraw) {
   const draw = () => {
     box.replaceChildren(
       h('h3', null, isNew ? '새 평가 만들기' : '평가 설정 수정'),
-      h('div', { class: 'field' }, h('label', null, '평가 이름'), h('input', { value: e.name, disabled: !!e.fixed, placeholder: '예) 단원평가 3단원', style: 'width:100%;max-width:360px', oninput: (x) => { e.name = x.target.value; } }),
-        e.fixed ? h('div', { class: 'muted', style: 'margin-top:4px' }, '기본 평가라서 이름을 바꾸거나 삭제할 수 없어요.') : null),
+      e.group === 'base'
+        ? h('div', { class: 'field' }, h('label', null, '과목 이름'), h('input', { value: e.sub, placeholder: '예) 국어', style: 'width:100%;max-width:200px', oninput: (x) => { e.sub = x.target.value.trim().slice(0, 12) || e.sub; e.name = `기초학력평가 ${e.sub}`; } }),
+          h('div', { class: 'muted', style: 'margin-top:4px' }, '기초학력평가는 기본 평가라서 삭제할 수 없어요. 과목 이름만 바꿀 수 있어요.'))
+        : h('div', { class: 'field' }, h('label', null, '평가 이름'), h('input', { value: e.name, disabled: !!e.fixed, placeholder: '예) 단원평가 3단원', style: 'width:100%;max-width:360px', oninput: (x) => { e.name = x.target.value; } }),
+          e.fixed ? h('div', { class: 'muted', style: 'margin-top:4px' }, '기본 평가라서 이름을 바꾸거나 삭제할 수 없어요.') : null),
       h('div', { class: 'field' }, h('label', null, '입력 방식'), h('div', { class: 'radios' },
         [['score', '점수를 직접 입력'], ['answers', '학생별 문항 응답을 입력하면 자동 채점']].map(([v, n]) =>
           h('label', null, h('input', { type: 'radio', name: 'etype', checked: e.type === v, disabled: !isNew, onchange: () => { e.type = v; if (v === 'answers' && !e.items.length) { e.items = Array.from({ length: 10 }, () => ({ ans: '', pts: 10 })); e.total = 100; } draw(); } }), n)))),
@@ -342,9 +358,16 @@ async function evalEntry(ev, redraw) {
   const head = h('tr', null, h('th', null, '학생'),
     ev.type === 'score' ? [cols.map(colHead), h('th', null, h('button', { class: 'sm', onclick: addCol }, '+ 열 추가'))] : ev.items.map((it, i) => h('th', { title: `정답 ${it.ans} / ${Math.round(it.pts * 100) / 100}점` }, i + 1)),
     h('th', null, ev.type === 'score' ? '평균' : '총점'), h('th', null, ev.cut != null ? `기준 ${ev.cut}점` : '결과'));
-  return h('div', { class: 'card' },
+  const subTabs = ev.group === 'base' ? h('div', { class: 'tabs', style: 'margin-bottom:10px' }, GR.cfg.evals.filter((x) => x.group === 'base').map((x) =>
+    h('button', { class: 'tab' + (x.id === ev.id ? ' active' : ''), onclick: () => { if (GR.dirty && !confirm('저장하지 않은 입력이 있어요. 다른 과목으로 갈까요?')) return; GR.dirty = false; GR.evalId = x.id; redraw(); } }, x.sub))) : null;
+  const delBtn = ev.fixed ? null : h('button', { class: 'sm danger', onclick: async () => {
+    if (!confirm(`"${ev.name}" 평가를 삭제할까요? 입력한 점수도 모두 사라져요.`)) return;
+    try { GR.cfg.evals = GR.cfg.evals.filter((x) => x.id !== ev.id); await saveCfg(); await APP.kvDel(key); delete GR.data[key]; GR.evalId = null; GR.dirty = false; toast('평가를 삭제했어요'); redraw(); } catch (x) { toast(errMsg(x), true); }
+  } }, '평가 삭제');
+  const pdfBtn = ev.type === 'answers' ? h('button', { class: 'sm', onclick: () => pdfGrade(ev, d, key, redraw) }, '📄 PDF로 정답·답안 불러오기') : null;
+  return h('div', { class: 'card' }, subTabs,
     h('div', { class: 'row gap' }, h('b', null, ev.name), h('span', { class: 'muted' }, `${ev.type === 'score' ? `점수 직접 입력 · 한 회 만점 ${max}점` : `문항 응답 입력(자동 채점) · 만점 ${max}점`}`),
-      h('div', { style: 'flex:1' }), dirtyNote(), h('button', { class: 'sm', onclick: () => { GR.editing = true; redraw(); } }, '설정 수정'),
+      h('div', { style: 'flex:1' }), dirtyNote(), pdfBtn, h('button', { class: 'sm', onclick: () => { GR.editing = true; redraw(); } }, '설정 수정'), delBtn,
       h('button', { class: 'primary', onclick: async () => {
         if (ev.type === 'score' && roster.some((s) => Object.values(rowOf(d, s.num)).some((v) => v > max || v < 0))) return toast('만점을 넘거나 0보다 작은 점수가 있습니다', true);
         try {
@@ -358,6 +381,172 @@ async function evalEntry(ev, redraw) {
     stats,
     h('div', { class: 'muted', style: 'margin:-4px 0 8px' }, ev.type === 'answers' ? '←→ 옆 문항, ↑↓ 위아래 학생으로 이동해요. (Tab도 됩니다)' : '↑↓ 이전·다음 학생, ←→ 옆 열로 이동해요. 열 제목을 누르면 잠금/풀림, ✎로 이름 바꾸기. 열을 새로 만들면 앞의 열은 잠겨요.'),
     gridNav(h('div', { class: 'table-wrap' }, h('table', { class: 'roster survey' }, h('thead', null, head), h('tbody', null, rows)))));
+}
+
+/* =====================================================
+   PDF로 정답·학생 답안 불러오기
+   - 평가기준 PDF: 글자를 읽어 "번호 → 정답"을 찾음 (표 모양 / 1. ③ 모양 모두)
+   - 답안지 모음 PDF: 쪽마다 학생 이름·번호와 답을 찾음. 손글씨 스캔처럼 글자가 없는 쪽은 그림을 보며 직접 입력
+   ===================================================== */
+async function loadPdf() {
+  if (window.__pdfjs) return window.__pdfjs;
+  const base = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/';
+  const m = await import(base + 'pdf.min.mjs');
+  m.GlobalWorkerOptions.workerSrc = base + 'pdf.worker.min.mjs';
+  window.__pdfjs = m; return m;
+}
+async function readPdf(file, opt) {
+  const pdfjs = await loadPdf();
+  const doc = await pdfjs.getDocument({ data: new Uint8Array(await file.arrayBuffer()) }).promise;
+  const pages = [];
+  for (let n = 1; n <= Math.min(doc.numPages, opt.max || 60); n++) {
+    const pg = await doc.getPage(n), vp = pg.getViewport({ scale: 1 });
+    const tc = await pg.getTextContent();
+    const items = tc.items.filter((it) => it.str && it.str.trim()).map((it) => ({ str: it.str, x: it.transform[4], y: vp.height - it.transform[5], h: Math.hypot(it.transform[2], it.transform[3]) }));
+    let canvas = null;
+    if (opt.render) {
+      const sc = Math.min(2, 900 / vp.width), v2 = pg.getViewport({ scale: sc });
+      canvas = document.createElement('canvas'); canvas.width = Math.round(v2.width); canvas.height = Math.round(v2.height);
+      const cx = canvas.getContext('2d'); cx.fillStyle = '#fff'; cx.fillRect(0, 0, canvas.width, canvas.height);
+      await pg.render({ canvasContext: cx, canvas, viewport: v2 }).promise;
+    }
+    pages.push({ n, items, canvas });
+    if (opt.onPage) opt.onPage(n, doc.numPages);
+  }
+  return pages;
+}
+/* 글자 조각을 줄로 묶기 */
+function pdfLines(items) {
+  const rows = [];
+  items.slice().sort((a, b) => a.y - b.y || a.x - b.x).forEach((it) => {
+    const r = rows.find((q) => Math.abs(q.y - it.y) <= Math.max(3, (it.h || 10) * 0.45));
+    if (r) r.items.push(it); else rows.push({ y: it.y, items: [it] });
+  });
+  return rows.map((r) => r.items.sort((a, b) => a.x - b.x).map((i) => i.str).join(' '));
+}
+const LABEL = /^(문항|번호|문제|정답|답|배점|점수|번|해설|정답표|채점기준|평가기준|과목|이름|성명)$/;
+const toks = (line) => line.replace(/([①-⑩])/g, ' $1 ').replace(/[|,·]/g, ' ').split(/\s+/).map((t) => t.replace(/^[(\[]|[.)\]:번]+$/g, '')).filter(Boolean);
+const isInt = (t) => /^\d{1,2}$/.test(t);
+/* 번호 → 정답 찾기. want: 문항 수(알면) */
+function parseAnswers(lines, want) {
+  const ans = {}, L = lines.map(toks), used = new Set();
+  // ① 표 모양: 한 줄에 연속 번호(1 2 3 …)가 3개 이상 → 다음 줄(또는 그다음 줄)의 답을 차례로
+  for (let li = 0; li < L.length; li++) {
+    const t = L[li], nums = t.filter(isInt).map(Number);
+    if (nums.length < 3 || t.filter((x) => !isInt(x) && !LABEL.test(x)).length > 1) continue;
+    let ok = true; for (let k = 1; k < nums.length; k++) if (nums[k] !== nums[k - 1] + 1) { ok = false; break; }
+    if (!ok) continue;
+    for (let nx = li + 1; nx <= Math.min(li + 2, L.length - 1); nx++) {
+      const a2 = L[nx].filter((x) => !LABEL.test(x));
+      if (a2.length >= nums.length && !(a2.filter(isInt).length === a2.length && a2.map(Number).every((v, k) => k === 0 || v === Number(a2[k - 1]) + 1))) {
+        nums.forEach((nn, k) => { ans[nn] = a2[k]; }); used.add(li); used.add(nx); li = nx; break;
+      }
+    }
+  }
+  // ② "1. ③ 2. ④" 모양: 줄이 바뀌어도 이어서, 번호를 1~2개 건너뛰어도 다시 맞춤
+  const flat = L.filter((_, i) => !used.has(i)).flat();
+  let expect = 1;
+  for (let k = 0; k < flat.length - 1; k++) {
+    const t = flat[k]; if (!isInt(t)) continue;
+    const v = Number(t); if (v < expect || v > expect + 2) continue;
+    let a2 = flat[k + 1]; if (LABEL.test(a2)) a2 = flat[k + 2]; if (a2 == null) continue;
+    if (isInt(a2) && Number(a2) === v + 1 && flat[k + 2] != null && !isInt(flat[k + 2])) continue;   // 번호만 이어진 경우
+    if (ans[v] == null) ans[v] = a2;
+    expect = v + 1; k++;
+    if (want && expect > want) break;
+  }
+  const n = want || Math.max(0, ...Object.keys(ans).map(Number));
+  return Array.from({ length: n }, (_, i) => (ans[i + 1] == null ? '' : ans[i + 1]));
+}
+function findStudent(text) {
+  const R = APP.roster().slice().sort((a, b) => b.name.length - a.name.length);
+  const byName = R.find((s) => s.name && text.includes(s.name));
+  if (byName) return byName.num;
+  const m = text.match(/(\d{1,2})\s*번/); if (m && R.some((s) => s.num === Number(m[1]))) return Number(m[1]);
+  return null;
+}
+function pdfGrade(ev, d, key, redraw) {
+  const roster = APP.roster();
+  const body = h('div');
+  const close = () => { ov.remove(); redraw(); };
+  const ov = h('div', { class: 'overlay' }, h('div', { class: 'modal pdfg' }, h('div', { class: 'row', style: 'justify-content:space-between;margin-bottom:6px' }, h('h3', { style: 'margin:0' }, `📄 PDF로 불러오기 · ${ev.name}`), h('button', { onclick: close }, '닫기')), body));
+  document.body.append(ov);
+  const S = { key: null, pages: null, per: 1, rows: null, busy: '' };
+  const fileBtn = (label, on) => { const inp = h('input', { type: 'file', accept: 'application/pdf', hidden: true, onchange: (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) on(f); } }); return [inp, h('button', { class: 'primary', onclick: () => inp.click() }, label)]; };
+  const buildRows = () => {
+    const per = S.per, groups = [];
+    for (let i = 0; i < S.pages.length; i += per) groups.push(S.pages.slice(i, i + per));
+    const used = new Set();
+    S.rows = groups.map((g) => {
+      const lines = g.flatMap((p) => pdfLines(p.items)), text = lines.join('\n');
+      let who = findStudent(text); if (who != null && used.has(who)) who = null; if (who != null) used.add(who);
+      const a = text.trim() ? parseAnswers(lines.filter((l) => !roster.some((s) => s.name && l.includes(s.name)) && !/(이름|성명|학번|반\s*\d|\d+\s*반)/.test(l)), ev.items.length) : Array(ev.items.length).fill('');
+      return { pages: g, who, ans: a, hasText: !!text.trim() };
+    });
+  };
+  const draw = () => {
+    const keyBox = h('div', { class: 'pdfg-sec' }, h('h4', null, '① 평가기준(정답) PDF'),
+      h('div', { class: 'muted', style: 'font-size:13px;margin-bottom:8px' }, '정답표가 있는 PDF를 올리면 문항 번호와 정답을 찾아요. 틀린 곳은 고친 뒤 "정답 등록"을 눌러요.'),
+      S.key ? h('div', null,
+        h('div', { class: 'qgrid' }, S.key.map((a, i) => h('div', { class: 'q' }, h('b', null, i + 1), h('input', { value: a, oninput: (e) => { S.key[i] = e.target.value; } })))),
+        h('div', { class: 'row gap', style: 'margin-top:8px;justify-content:flex-start' },
+          h('span', { class: 'muted' }, `${S.key.length}문항을 찾았어요`), h('button', { class: 'sm', onclick: () => { S.key.push(''); draw(); } }, '+ 문항'), S.key.length > 1 ? h('button', { class: 'sm', onclick: () => { S.key.pop(); draw(); } }, '− 문항') : null,
+          h('button', { class: 'sm primary', onclick: async () => {
+            const n = S.key.length; if (!n) return;
+            const total = ev.total || evMax(ev) || 100;
+            ev.items = S.key.map((a, i) => ({ ans: String(a).trim(), pts: (ev.items[i] && n === ev.items.length) ? ev.items[i].pts : Math.round(total / n * 10000) / 10000 }));
+            ev.total = total;
+            try { await saveCfg(); toast(`정답 ${n}문항을 등록했어요`); if (S.pages) { buildRows(); } draw(); } catch (x) { toast(errMsg(x), true); }
+          } }, '정답 등록'))) : null,
+      ...fileBtn(S.key ? '다른 PDF 올리기' : '평가기준 PDF 올리기', async (f) => {
+        S.busy = '평가기준 PDF를 읽는 중…'; draw();
+        try {
+          const pages = await readPdf(f, { max: 20 });
+          const lines = pages.flatMap((p) => pdfLines(p.items));
+          if (!lines.join('').trim()) { S.busy = ''; toast('글자가 없는 PDF(스캔본)라서 정답을 읽지 못했어요. 정답은 "설정 수정"에서 직접 적어 주세요.', true); draw(); return; }
+          S.key = parseAnswers(lines, 0); if (!S.key.length) S.key = ev.items.map((i) => i.ans);
+          if (!S.key.some((x) => x)) toast('정답을 찾지 못했어요. 칸에 직접 적어 주세요.', true);
+        } catch (x) { toast('PDF를 열지 못했어요: ' + (x.message || x), true); }
+        S.busy = ''; draw();
+      }));
+    const ansBox = h('div', { class: 'pdfg-sec' }, h('h4', null, '② 학생 답안지 모음 PDF'),
+      h('div', { class: 'muted', style: 'font-size:13px;margin-bottom:8px;line-height:1.6' }, '학생 한 명의 답안지가 몇 쪽인지 고른 뒤 PDF를 올려요. 쪽마다 학생 이름·번호와 답을 찾아 채워요. 손글씨를 스캔한 PDF는 글자를 읽을 수 없어서, 왼쪽 그림을 보며 답을 직접 적으면 돼요.'),
+      h('div', { class: 'row gap', style: 'justify-content:flex-start;margin-bottom:8px' }, h('span', null, '학생 한 명당'), h('select', { onchange: (e) => { S.per = Number(e.target.value); if (S.pages) buildRows(); draw(); } }, [1, 2, 3, 4].map((v) => h('option', { value: v, selected: S.per === v }, v + '쪽'))),
+        ...fileBtn(S.pages ? '다른 PDF 올리기' : '답안지 PDF 올리기', async (f) => {
+          S.busy = '답안지 PDF를 읽는 중…'; draw();
+          try { S.pages = await readPdf(f, { render: true, max: 160, onPage: (n, t) => { const b = body.querySelector('.pdfg-busy'); if (b) b.textContent = `답안지 PDF를 읽는 중… ${n}/${t}쪽`; } }); buildRows(); }
+          catch (x) { toast('PDF를 열지 못했어요: ' + (x.message || x), true); }
+          S.busy = ''; draw();
+        })),
+      S.rows ? h('div', null,
+        h('div', { class: 'muted', style: 'margin-bottom:6px' }, `${S.rows.length}명 분량 · 학생을 찾은 답안지 ${S.rows.filter((r) => r.who != null).length}장 · 글자를 읽은 답안지 ${S.rows.filter((r) => r.hasText).length}장`),
+        h('div', { class: 'pdfg-list' }, S.rows.map((r, ri) => {
+          const sel = h('select', { onchange: (e) => { r.who = e.target.value ? Number(e.target.value) : null; } }, h('option', { value: '' }, '학생 선택'), roster.map((s) => h('option', { value: s.num, selected: r.who === s.num }, `${s.num} ${s.name}`)));
+          const score = h('b', { class: 'pdfg-sc' });
+          const upd = () => { const t = ev.items.reduce((acc, it, i) => acc + (norm(r.ans[i]) !== '' && norm(r.ans[i]) === norm(it.ans) ? Number(it.pts) || 0 : 0), 0); score.textContent = `${fmt(t)}점`; };
+          const cells = ev.items.map((it, i) => { const inp = h('input', { value: r.ans[i] || '', oninput: (e) => { r.ans[i] = e.target.value; mark(); upd(); } });
+            const mark = () => { const v = norm(inp.value); inp.classList.toggle('ok', v !== '' && v === norm(it.ans)); inp.classList.toggle('no', v !== '' && v !== norm(it.ans)); };
+            mark(); return h('div', { class: 'q' }, h('b', null, i + 1), inp); });
+          upd();
+          return h('div', { class: 'pdfg-row' },
+            h('div', { class: 'pdfg-img' }, r.pages.map((p) => { const c = p.canvas; c.classList.add('pdfg-cv'); c.onclick = () => c.classList.toggle('big'); return c; })),
+            h('div', { class: 'pdfg-form' }, h('div', { class: 'row gap', style: 'justify-content:flex-start' }, h('span', { class: 'muted' }, `${ri + 1}번째`), sel, score, r.hasText ? null : h('span', { class: 'chip-s' }, '글자 없음 · 직접 입력')),
+              h('div', { class: 'qgrid' }, cells)));
+        })),
+        h('div', { class: 'row', style: 'justify-content:flex-end;margin-top:10px;position:sticky;bottom:0;background:var(--surface);padding:8px 0' },
+          h('button', { class: 'primary', onclick: async () => {
+            const ok = S.rows.filter((r) => r.who != null);
+            if (!ok.length) return toast('학생을 고른 답안지가 없어요', true);
+            const dup = ok.map((r) => r.who).filter((v, i, a) => a.indexOf(v) !== i);
+            if (dup.length) return toast(`같은 학생이 두 번 골라졌어요: ${dup.map((n) => (roster.find((s) => s.num === n) || {}).name).join(', ')}`, true);
+            const over = ok.filter((r) => d.answers[r.who] && d.answers[r.who].some((x) => String(x || '').trim())).length;
+            if (over && !confirm(`이미 답이 입력된 학생 ${over}명은 새 답으로 바뀌어요. 계속할까요?`)) return;
+            ok.forEach((r) => { d.answers[r.who] = ev.items.map((_, i) => String(r.ans[i] || '').trim()); });
+            try { await APP.kvSet(key, d); GR.dirty = false; toast(`${ok.length}명의 답을 넣고 채점했어요`); close(); } catch (x) { toast(errMsg(x), true); }
+          } }, '채점 결과 반영'))) : null);
+    body.replaceChildren(...[S.busy ? h('div', { class: 'banner pdfg-busy' }, S.busy) : null, keyBox, ansBox].filter(Boolean));
+  };
+  draw();
 }
 
 /* =====================================================
