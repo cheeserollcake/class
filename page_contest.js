@@ -1,428 +1,538 @@
-/* 대회 관리: 리그 / 토너먼트 · 개인 / 팀 / 반대항 */
+/* 대회 관리: 리그 · 토너먼트 만들기, 경기 기록, 순위표, 대진표 (레이아웃은 체육 워크스페이스 대회 운영과 같게) */
 (() => {
 'use strict';
 const APP = window.APP;
 const { h, toast, errMsg } = APP;
 
-const C = { index: null, cache: {}, cur: null, view: 'bracket', wiz: null, loading: false };
-APP.onClear.push(() => { C.index = null; C.cache = {}; C.cur = null; C.wiz = null; });
+const C = { index: null, cache: {}, cur: null, pend: false, cv: false, bmode: 'h' };
+APP.onClear.push(() => { C.index = null; C.cache = {}; C.cur = null; });
+try { const p = JSON.parse(localStorage.getItem('contest_view') || '{}'); C.pend = !!p.pend; C.cv = !!p.cv; C.bmode = p.bmode || 'h'; } catch (e) { /* 기본 */ }
+const saveView = () => { try { localStorage.setItem('contest_view', JSON.stringify({ pend: C.pend, cv: C.cv, bmode: C.bmode })); } catch (e) { /* 저장 안 됨 */ } };
 
-const KIND = { league: '리그', cup: '토너먼트' };
-const UNIT = { solo: '개인', team: '팀', class: '반대항' };
+const UNIT = { individual: '개인', team: '팀', class: '반대항' };
+const SCORING = [['score', '득점·실점'], ['sets', '세트 스코어'], ['wdl', '승·무·패']];
 const roster = () => APP.roster();
 const stu = (n) => roster().find((s) => s.num === n);
 const gcls = (g) => APP.gcls(g);
 const shuffle = (a) => { a = a.slice(); for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-const num = (v) => (v === '' || v == null || isNaN(Number(v)) ? null : Number(v));
+const unitWord = (c) => (c.unit === 'team' ? '팀' : c.unit === 'class' ? '반' : '명');
 
-/* ---------- 저장 (경기는 짧은 배열로 줄여서 저장) ---------- */
+/* ---------- 대진 만들기 ---------- */
+/* 리그: 원형 방식. 라운드마다 한 참가자는 한 경기만 (entrant 인덱스) */
+function leagueMatches(n, legs) {
+  const t = Array.from({ length: n }, (_, i) => i); if (t.length % 2) t.push(null);
+  const L = t.length; let arr = t.slice(); const base = [];
+  for (let r = 0; r < L - 1; r++) {
+    const ms = [];
+    for (let i = 0; i < L / 2; i++) { const a = arr[i], b = arr[L - 1 - i]; if (a != null && b != null) ms.push(r % 2 ? [b, a] : [a, b]); }
+    base.push(ms); arr = [arr[0], arr[L - 1], ...arr.slice(1, L - 1)];
+  }
+  const all = legs === 2 ? [...base, ...base.map((ms) => ms.map(([a, b]) => [b, a]))] : base;
+  const out = []; all.forEach((ms, r) => ms.forEach(([a, b]) => out.push({ a, b, r })));
+  return out;
+}
+/* 토너먼트: 2의 거듭제곱 칸, 부전승은 위 시드에게 고르게 */
+function seedsFor(len) { let size = 2; while (size < len) size *= 2; let s = [1, 2]; while (s.length < size) { const m = s.length * 2 + 1; s = s.flatMap((x) => [x, m - x]); } return s; }
+const makeSlots = (ids) => seedsFor(ids.length).map((sd) => (ids[sd - 1] != null ? ids[sd - 1] : null));
+const seedOrder = (slots) => { const sd = seedsFor(slots.length); return slots.map((id, k) => ({ id, s: sd[k] })).filter((x) => x.id != null).sort((a, b) => a.s - b.s).map((x) => x.id); };
+const arrangeIds = (ids, big) => [...ids.filter((i) => big[i]), ...ids.filter((i) => !big[i])];
+const roundName = (cnt) => (cnt === 1 ? '결승' : cnt === 2 ? '준결승' : `${cnt * 2}강`);
+function bracket(c) {
+  const size = c.slots.length, R = Math.round(Math.log2(size)), rounds = []; let no = 0;
+  for (let r = 0; r < R; r++) {
+    const cnt = size >> (r + 1), ms = [];
+    for (let i = 0; i < cnt; i++) {
+      let a, b, bye = false;
+      if (r === 0) { a = c.slots[2 * i]; b = c.slots[2 * i + 1]; bye = a == null || b == null; } else { a = rounds[r - 1][2 * i].w; b = rounds[r - 1][2 * i + 1].w; }
+      const key = `t${r}-${i}`, res = a != null && b != null ? c.res[key] || null : null;
+      const m = { key, r, i, a: a ?? null, b: b ?? null, bye, res, name: roundName(cnt) };
+      m.w = bye ? (a ?? b ?? null) : res ? (res.w === 'a' ? a : res.w === 'b' ? b : null) : null;
+      m.l = !bye && res ? (res.w === 'a' ? b : res.w === 'b' ? a : null) : null;
+      ms.push(m);
+    }
+    let k = 0, rn = 0; ms.forEach((m) => { if (!m.bye) { m.rn = ++rn; m.no = ++no; m.court = (k++ % c.courts) + 1; } });
+    rounds.push(ms);
+  }
+  let third = null;
+  if (c.third && R >= 2) { const sf = rounds[R - 2]; const a = sf[0].l, b = sf[1].l; third = { key: 'third', a, b, res: a != null && b != null ? c.res.third || null : null, name: '3·4위전', court: 1, no: ++no }; }
+  return { rounds, third, final: rounds[R - 1][0] };
+}
+/* 리그 경기 순서: 빅매치는 뒤로, 한 차례(경기장 수만큼)에 같은 참가자가 겹치지 않게 */
+function arranged(c) {
+  const big = c.big || {}, bm = (m) => big[m.a] && big[m.b];
+  const list = c.matches.map((m, idx) => ({ ...m, key: 'm' + idx, res: c.res['m' + idx] || null, bigm: bm(m) }));
+  const rest = [...list.filter((m) => !m.bigm), ...list.filter((m) => m.bigm)], out = [];
+  while (rest.length) {
+    const used = new Set(), slot = [];
+    for (let i = 0; i < rest.length && slot.length < c.courts;) { const q = rest[i]; if (used.has(q.a) || used.has(q.b)) { i++; continue; } used.add(q.a); used.add(q.b); slot.push(q); rest.splice(i, 1); }
+    slot.forEach((q, k) => { q.court = k + 1; out.push(q); });
+  }
+  out.forEach((q, i) => { q.no = i + 1; });
+  return out;
+}
+function allGames(c) {
+  if (c.format === 'league') return arranged(c);
+  const b = bracket(c); return [...b.rounds.flat().filter((x) => !x.bye), ...(b.third ? [b.third] : [])];
+}
+function progress(c) { const l = allGames(c); const t = l.length, d = l.filter((x) => x.res).length; return { done: d, total: t, pct: t ? Math.round(d / t * 100) : 0 }; }
+
+/* ---------- 순위 ---------- */
+function standings(c) {
+  const T = c.entrants.map((e, i) => ({ i, p: 0, w: 0, d: 0, l: 0, f: 0, a: 0 }));
+  c.matches.forEach((m, idx) => { const r = c.res['m' + idx]; if (!r) return; const A = T[m.a], B = T[m.b]; A.p++; B.p++;
+    if (r.sa != null) { A.f += r.sa; A.a += r.sb; B.f += r.sb; B.a += r.sa; }
+    if (r.w === 'a') { A.w++; B.l++; } else if (r.w === 'b') { B.w++; A.l++; } else { A.d++; B.d++; } });
+  const rows = T.map((x) => ({ ...x, pts: x.w * c.pts.w + x.d * c.pts.d + x.l * c.pts.l, diff: x.f - x.a }));
+  const h2h = (x, y) => { let s = 0; c.matches.forEach((m, idx) => { const r = c.res['m' + idx]; if (!r) return; if (m.a === x.i && m.b === y.i) s += r.w === 'a' ? 1 : r.w === 'b' ? -1 : 0; else if (m.a === y.i && m.b === x.i) s += r.w === 'b' ? 1 : r.w === 'a' ? -1 : 0; }); return s; };
+  rows.sort((x, y) => y.pts - x.pts || (c.tie === 'h2h' ? h2h(y, x) : 0) || y.diff - x.diff || y.f - x.f || y.w - x.w || (c.tie !== 'h2h' ? h2h(y, x) : 0) || x.i - y.i);
+  let rank = 0; rows.forEach((r, k) => { const p = rows[k - 1]; if (!p || p.pts !== r.pts || p.diff !== r.diff || p.f !== r.f || p.w !== r.w) rank = k + 1; r.rank = rank; });
+  return rows;
+}
+const scText = (c, r) => (!r ? 'vs' : c.scoring === 'wdl' ? (r.w === 'a' ? '승 : 패' : r.w === 'b' ? '패 : 승' : '무 : 무') : `${r.sa} : ${r.sb}`);
+
+/* ---------- 저장 (경기·기록을 짧게 줄여서) ---------- */
 const keyOf = (id) => 'contest:c:' + id;
-const pack = (c) => ({ ...c, matches: c.matches.map((m) => { const a = [m.a, m.b, m.r, m.s, m.c, m.sa, m.sb, m.w, m.src ? m.src[0] : null, m.src ? m.src[1] : null, m.k || null, m.p || null]; while (a.length && a[a.length - 1] == null) a.pop(); return a; }) });
-const unpack = (c) => ({ ...c, matches: (c.matches || []).map((a) => ({ a: a[0] ?? null, b: a[1] ?? null, r: a[2] || 0, s: a[3] || 0, c: a[4] || 0, sa: a[5] ?? null, sb: a[6] ?? null, w: a[7] || 0, src: a[8] != null ? [a[8], a[9]] : null, k: a[10] || null, p: a[11] || null })) });
+const pack = (c) => ({ v: 2, ...c, matches: c.matches ? c.matches.map((m) => [m.a, m.b, m.r]) : undefined, res: Object.fromEntries(Object.entries(c.res || {}).map(([k, r]) => [k, [r.sa ?? null, r.sb ?? null, r.w]])) });
+const unpack = (o) => ({ ...o, matches: o.matches ? o.matches.map((m) => ({ a: m[0], b: m[1], r: m[2] })) : undefined, res: Object.fromEntries(Object.entries(o.res || {}).map(([k, r]) => [k, { sa: r[0], sb: r[1], w: r[2] }])), out: o.out || {}, big: o.big || {}, live: o.live || {} });
+/* 예전 형식(v1) 대회 옮기기 */
+function migrate(o) {
+  const ms = (o.matches || []).map((a) => ({ a: a[0] ?? null, b: a[1] ?? null, r: a[2] || 0, sa: a[5] ?? null, sb: a[6] ?? null, w: a[7] || 0, k: a[10] || null, p: a[11] || null }));
+  const W = (m) => (m.w === 1 ? 'a' : m.w === 2 ? 'b' : m.w === 3 ? 'd' : null);
+  const unit = o.unit === 'solo' ? 'individual' : o.unit;
+  const c = { id: o.id, name: o.name, format: o.kind === 'cup' ? 'tournament' : 'league', unit, created: o.created, legs: o.cfg && o.cfg.double ? 2 : 1, draw: true, pts: (o.cfg && o.cfg.pts) || { w: 3, d: 1, l: 0 }, tie: 'diff', third: !!(o.cfg && o.cfg.third),
+    scoring: 'score', target: o.cfg && o.cfg.scoring === 'target' ? o.cfg.target : null, sets: 3, courts: (o.cfg && o.cfg.courts) || 1,
+    entrants: (o.teams || []).map((t, i) => ({ id: 'e' + i, name: t.name, members: t.members || [] })), res: {}, out: {}, big: {}, live: {} };
+  if (c.format === 'league') { c.matches = ms.map((m) => ({ a: m.a, b: m.b, r: m.r })); ms.forEach((m, i) => { if (W(m)) c.res['m' + i] = { sa: m.sa, sb: m.sb, w: W(m) }; }); }
+  else {
+    const r0 = ms.filter((m) => m.r === 0 && m.k !== 'third'); c.slots = r0.flatMap((m) => [m.a === -1 ? null : m.a, m.b === -1 ? null : m.b]);
+    const byR = {}; ms.forEach((m) => { if (m.k === 'third') { if (W(m)) c.res.third = { sa: m.sa, sb: m.sb, w: W(m) }; return; } (byR[m.r] = byR[m.r] || []).push(m); });
+    Object.entries(byR).forEach(([r, list]) => list.forEach((m, i) => { const w = m.w ? (m.w === 1 ? 'a' : 'b') : null; if (w && m.a !== -1 && m.b !== -1) c.res[`t${r}-${i}`] = { sa: m.sa, sb: m.sb, w }; }));
+  }
+  return c;
+}
 let saveT = null, saveIdxT = null;
 function save(c) {
+  C.cache[c.id] = c;
   clearTimeout(saveT);
-  saveT = setTimeout(() => APP.kvSet(keyOf(c.id), pack(c)).catch((e) => toast(e.message === 'TOOBIG' ? '대회 기록이 너무 커서 저장하지 못했어요.' : errMsg(e), true)), 600);
+  saveT = setTimeout(() => APP.kvSet(keyOf(c.id), pack(c)).catch((e) => toast(e.message === 'TOOBIG' ? '대회 기록이 너무 커서 저장하지 못했어요.' : errMsg(e), true)), 500);
   const it = C.index.list.find((x) => x.id === c.id);
-  if (it) { const p = progress(c); if (it.done !== p.done || it.total !== p.total || it.name !== c.name) { Object.assign(it, { name: c.name, done: p.done, total: p.total }); saveIndex(); } }
+  if (it) { const p = progress(c); Object.assign(it, { name: c.name, format: c.format, unit: c.unit, done: p.done, total: p.total, archived: !!c.archived }); saveIndex(); }
+}
+async function saveNow(c) {
+  clearTimeout(saveT); clearTimeout(saveIdxT); C.cache[c.id] = c;
+  const it = C.index.list.find((x) => x.id === c.id);
+  if (it) { const p = progress(c); Object.assign(it, { name: c.name, format: c.format, unit: c.unit, done: p.done, total: p.total, archived: !!c.archived }); }
+  try { await APP.kvSet(keyOf(c.id), pack(c)); await APP.kvSet('contest:index', C.index); } catch (e) { toast(errMsg(e), true); }
 }
 function saveIndex() { clearTimeout(saveIdxT); saveIdxT = setTimeout(() => APP.kvSet('contest:index', C.index).catch((e) => toast(errMsg(e), true)), 400); }
 async function loadIndex() {
   const kv = await APP.kvGet(['contest:index']);
   C.index = kv['contest:index'] && Array.isArray(kv['contest:index'].list) ? kv['contest:index'] : { list: [], cur: null };
-  C.cur = C.index.cur && C.index.list.some((x) => x.id === C.index.cur) ? C.index.cur : (C.index.list[0] || {}).id || null;
+  C.index.list.forEach((x) => { if (x.kind) { x.format = x.kind === 'cup' ? 'tournament' : 'league'; delete x.kind; } if (x.unit === 'solo') x.unit = 'individual'; });
+  C.cur = C.index.cur;
 }
 async function getContest(id) {
   if (C.cache[id]) return C.cache[id];
-  const kv = await APP.kvGet([keyOf(id)]);
-  const c = kv[keyOf(id)] ? unpack(kv[keyOf(id)]) : null;
-  if (c) C.cache[id] = c;
-  return c;
+  const kv = await APP.kvGet([keyOf(id)]); const o = kv[keyOf(id)];
+  if (!o) return null;
+  const c = o.v === 2 ? unpack(o) : migrate(o);
+  C.cache[id] = c; return c;
 }
 
-/* ---------- 대진 만들기 ---------- */
-/* 리그: 원형 방식으로 라운드를 만든 뒤, 경기장 수만큼 한 차례(동시 진행)에 배치 — 같은 사람이 한 차례에 두 번 나오지 않게 */
-function leagueMatches(n, double, courts) {
-  const ids = Array.from({ length: n }, (_, i) => i);
-  if (n % 2) ids.push(null);
-  const L = ids.length, rounds = [];
-  let arr = ids.slice();
-  for (let r = 0; r < L - 1; r++) {
-    const ms = [];
-    for (let i = 0; i < L / 2; i++) {
-      const a = arr[i], b = arr[L - 1 - i];
-      if (a != null && b != null) ms.push(r % 2 && i === 0 ? [b, a] : [a, b]);
-    }
-    rounds.push(ms);
-    arr = [arr[0], arr[L - 1], ...arr.slice(1, L - 1)];
-  }
-  const all = [];
-  rounds.forEach((ms, r) => ms.forEach(([a, b]) => all.push({ a, b, r })));
-  if (double) rounds.forEach((ms, r) => ms.forEach(([a, b]) => all.push({ a: b, b: a, r: r + rounds.length })));
-  // 차례 배치
-  const left = all.slice(), out = [];
-  let slot = 0;
-  const K = Math.max(1, courts);
-  while (left.length) {
-    const used = new Set(), pick = [];
-    for (let i = 0; i < left.length && pick.length < K; i++) {
-      const m = left[i];
-      if (used.has(m.a) || used.has(m.b)) continue;
-      used.add(m.a); used.add(m.b); pick.push(i);
-    }
-    pick.reverse().forEach((i, j) => { const m = left.splice(i, 1)[0]; m.s = slot; out.push(m); });
-    out.slice(-pick.length).sort((x, y) => x.r - y.r).forEach((m, i) => { m.c = i; });
-    slot++;
-  }
-  return out.map((m) => ({ a: m.a, b: m.b, r: m.r, s: m.s, c: m.c, sa: null, sb: null, w: 0, src: null, k: null, p: null }));
-}
-/* 토너먼트: 2의 거듭제곱 칸에 시드 배치(부전승은 고르게 퍼짐) */
-function seedOrder(P) { let o = [1]; while (o.length < P) { const m = o.length * 2 + 1; o = o.flatMap((x) => [x, m - x]); } return o; }
-function cupMatches(n, third) {
-  let P = 1; while (P < n) P *= 2;
-  const order = seedOrder(P), ms = [];
-  const slots = order.map((sd) => (sd <= n ? sd - 1 : -1));   // -1 = 부전승
-  for (let i = 0; i < P / 2; i++) ms.push({ a: slots[2 * i], b: slots[2 * i + 1], r: 0, src: null });
-  let prev = ms.map((_, i) => i), r = 1;
-  while (prev.length > 1) {
-    const cur = [];
-    for (let i = 0; i < prev.length; i += 2) { ms.push({ a: null, b: null, r, src: [prev[i], prev[i + 1]] }); cur.push(ms.length - 1); }
-    prev = cur; r++;
-  }
-  if (third && r >= 3) { const semis = ms.map((m, i) => i).filter((i) => ms[i].r === r - 2); ms.push({ a: null, b: null, r: r - 1, src: semis, k: 'third' }); }
-  return ms.map((m) => ({ a: m.a, b: m.b, r: m.r, s: 0, c: 0, sa: null, sb: null, w: 0, src: m.src, k: m.k || null, p: null }));
-}
-const isBye = (m) => m.a === -1 || m.b === -1;
-const real = (m) => !isBye(m) && m.a != null && m.b != null;
-function winnerOf(c, m) {
-  if (m.a === -1 && m.b != null && m.b !== -1) return m.b;
-  if (m.b === -1 && m.a != null && m.a !== -1) return m.a;
-  if (m.a === -1 && m.b === -1) return -1;
-  return m.w === 1 ? m.a : m.w === 2 ? m.b : null;
-}
-function loserOf(c, m) { const w = winnerOf(c, m); if (w == null || isBye(m)) return null; return w === m.a ? m.b : m.a; }
-/* 결과 반영: 점수 → 승패, 토너먼트는 다음 경기 칸 채우기 + 경기장·차례 다시 정하기 */
-function resolve(c) {
-  const cup = c.kind === 'cup';
-  c.matches.forEach((m) => {
-    if (!cup) {
-      if (m.sa == null || m.sb == null) m.w = 0;
-      else m.w = m.sa > m.sb ? 1 : m.sb > m.sa ? 2 : 3;
-    }
-  });
-  if (!cup) return;
-  c.matches.forEach((m) => {
-    if (m.src) {
-      const f = m.k === 'third' ? (i) => loserOf(c, c.matches[i]) : (i) => winnerOf(c, c.matches[i]);
-      const na = f(m.src[0]), nb = f(m.src[1]);
-      if (na !== m.a || nb !== m.b) { m.a = na; m.b = nb; m.sa = null; m.sb = null; m.w = 0; m.p = null; }
-    }
-    if (real(m)) {
-      if (m.sa == null || m.sb == null) m.w = 0;
-      else if (m.sa !== m.sb) m.w = m.sa > m.sb ? 1 : 2;
-      else m.w = m.p === 1 || m.p === 2 ? m.p : 0;   // 동점이면 승자를 직접 고름
-    } else if (!isBye(m)) m.w = 0;
-  });
-  // 경기장·차례: 라운드 순서대로 실제 경기만
-  const K = Math.max(1, c.cfg.courts); let slot = 0;
-  const maxR = Math.max(...c.matches.map((m) => m.r));
-  for (let r = 0; r <= maxR; r++) {
-    const rs = c.matches.filter((m) => m.r === r && !isBye(m)).sort((x, y) => (y.k === 'third') - (x.k === 'third'));
-    rs.forEach((m, i) => { m.s = slot + Math.floor(i / K); m.c = i % K; });
-    slot += Math.ceil(rs.length / K);
-  }
-}
-function progress(c) {
-  const ms = c.matches.filter((m) => !isBye(m));
-  const total = ms.length, done = ms.filter((m) => m.w).length;
-  return { total, done, pct: total ? Math.round(done / total * 100) : 0 };
+/* ---------- 작은 부품 ---------- */
+const seg = (cur, opts, on) => h('div', { class: 'cz-seg' }, opts.map(([v, n, dis]) => h('button', { type: 'button', class: cur === v ? 'on' : '', disabled: !!dis, onclick: () => on(v) }, n)));
+const setRow = (label, sub, ctl) => h('div', { class: 'cz-setrow' }, h('span', null, h('b', null, label), sub ? h('small', null, sub) : null), ctl);
+const stepper = (val, min, max, on, cls) => h('div', { class: 'cz-stepper ' + (cls || '') },
+  h('button', { type: 'button', onclick: () => on(Math.max(min, val - 1)) }, '−'),
+  h('input', { type: 'number', inputmode: 'numeric', value: val, min, max, onchange: (e) => on(Math.max(min, Math.min(max, Number(e.target.value) | 0))) }),
+  h('button', { type: 'button', onclick: () => on(Math.min(max, val + 1)) }, '+'));
+const bar = (pct) => h('span', { class: 'cz-bar' }, h('i', { style: `width:${pct}%` }));
+function dialog(title, body, foot, cls) {
+  const ov = h('div', { class: 'overlay' });
+  const close = () => { ov.remove(); document.removeEventListener('keydown', esc); };
+  const esc = (e) => { if (e.key === 'Escape') close(); };
+  ov.append(h('div', { class: 'modal cz-dlg ' + (cls || '') }, h('h3', null, title), body, foot ? h('div', { class: 'cz-foot' }, foot) : null));
+  ov.addEventListener('pointerdown', (e) => { if (e.target === ov) close(); });
+  document.addEventListener('keydown', esc); document.body.append(ov);
+  return { ov, close };
 }
 
-/* ---------- 순위 ---------- */
-function leagueTable(c) {
-  const T = c.teams.map((t, i) => ({ i, name: t.name, gp: 0, w: 0, d: 0, l: 0, gf: 0, ga: 0, pts: 0 }));
-  const P = c.cfg.pts;
-  c.matches.forEach((m) => {
-    if (!m.w) return;
-    const A = T[m.a], B = T[m.b];
-    A.gp++; B.gp++; A.gf += m.sa; A.ga += m.sb; B.gf += m.sb; B.ga += m.sa;
-    if (m.w === 1) { A.w++; B.l++; A.pts += P.w; B.pts += P.l; } else if (m.w === 2) { B.w++; A.l++; B.pts += P.w; A.pts += P.l; } else { A.d++; B.d++; A.pts += P.d; B.pts += P.d; }
-  });
-  T.forEach((t) => { t.gd = t.gf - t.ga; });
-  T.sort((x, y) => y.pts - x.pts || y.gd - x.gd || y.gf - x.gf || x.i - y.i);
-  T.forEach((t, k) => { const p = T[k - 1]; t.rank = p && p.pts === t.pts && p.gd === t.gd && p.gf === t.gf ? p.rank : k + 1; });
-  return T;
-}
-function cupTable(c) {
-  const maxR = Math.max(...c.matches.filter((m) => m.k !== 'third').map((m) => m.r));
-  const fin = c.matches.find((m) => m.r === maxR && m.k !== 'third'), third = c.matches.find((m) => m.k === 'third');
-  const out = new Map(); const set = (i, rank, label) => { if (i != null && i >= 0 && !out.has(i)) out.set(i, { rank, label }); };
-  const rname = (r) => roundName(c, r);
-  if (fin && fin.w) { set(winnerOf(c, fin), 1, '우승'); set(loserOf(c, fin), 2, '준우승'); }
-  if (third && third.w) { set(winnerOf(c, third), 3, '3위'); set(loserOf(c, third), 4, '4위'); }
-  for (let r = maxR; r >= 0; r--) {
-    const lost = c.matches.filter((m) => m.r === r && m.k !== 'third' && m.w && !isBye(m)).map((m) => loserOf(c, m)).filter((x) => x != null && !out.has(x));
-    const n = c.teams.length;
-    const rank = Math.pow(2, maxR - r) + 1;
-    lost.forEach((x) => set(x, Math.min(rank, n), r === maxR ? '준우승' : `${rname(r)} 탈락`));
-  }
-  return c.teams.map((t, i) => ({ i, name: t.name, ...(out.get(i) || { rank: null, label: alive(c, i) ? '진행 중' : '' }) }))
-    .sort((x, y) => (x.rank || 99) - (y.rank || 99) || x.i - y.i);
-}
-function alive(c, i) { return !c.matches.some((m) => m.k !== 'third' && m.w && !isBye(m) && loserOf(c, m) === i); }
-function roundName(c, r) {
-  const maxR = Math.max(...c.matches.filter((m) => m.k !== 'third').map((m) => m.r)), left = Math.pow(2, maxR - r + 1);
-  return left === 2 ? '결승' : left === 4 ? '준결승' : `${left}강`;
+/* ---------- 경기 규칙 (만들 때·고칠 때 같이) ---------- */
+function rulesBody(d, rd, isL, lock) {
+  const ptIn = (k, n) => h('label', { class: 'cz-pt' }, n, h('input', { type: 'number', min: 0, max: 9, value: d.pts[k], onchange: (e) => { d.pts[k] = Math.max(0, Math.min(9, Number(e.target.value) | 0)); } }));
+  return [
+    isL ? h('div', { class: 'cz-sec' }, h('b', { class: 'cz-sec-t' }, '리그'),
+      setRow('경기 횟수', lock.legs ? '기록이 있어서 바꿀 수 없어요' : '서로 몇 번씩 만나는지', seg(d.legs, [[1, '한 번씩', lock.legs && d.legs !== 1], [2, '두 번씩', lock.legs && d.legs !== 2]], (v) => { d.legs = v; rd(); })),
+      setRow('무승부', lock.noDraw ? '무승부 기록이 있어서 끌 수 없어요' : '', seg(d.draw ? 'y' : 'n', [['n', '없음', lock.noDraw], ['y', '있음']], (v) => { d.draw = v === 'y'; rd(); })),
+      setRow('승점', '승 · 무 · 패', h('span', { class: 'cz-pts' }, ptIn('w', '승'), d.draw ? ptIn('d', '무') : null, ptIn('l', '패'))),
+      setRow('승점이 같을 때', '', seg(d.scoring === 'wdl' ? 'h2h' : d.tie, d.scoring === 'wdl' ? [['h2h', '승자승 먼저']] : [['diff', '득실차 먼저'], ['h2h', '승자승 먼저']], (v) => { d.tie = v; rd(); })))
+      : h('div', { class: 'cz-sec' }, h('b', { class: 'cz-sec-t' }, '토너먼트'),
+        setRow('3·4위전', '', seg(d.third ? 'y' : 'n', [['n', '없음'], ['y', '진행']], (v) => { d.third = v === 'y'; rd(); })),
+        lock.edit ? null : setRow('대진 배치', '', seg(d.seed, [['random', '무작위'], ['order', '고른 순서']], (v) => { d.seed = v; rd(); }))),
+    h('div', { class: 'cz-sec' }, h('b', { class: 'cz-sec-t' }, '기록'),
+      setRow('기록 방식', lock.scoring ? '기록이 있어서 바꿀 수 없어요' : d.scoring === 'score' ? '양쪽 점수를 모두 적어요' : d.scoring === 'sets' ? '이긴 세트 수만 적어요 (예 2:1)' : '누가 이겼는지만 적어요',
+        seg(d.scoring, SCORING.map(([v, n]) => [v, n, lock.scoring && v !== d.scoring]), (v) => { d.scoring = v; if (v === 'wdl') d.tie = 'h2h'; rd(); })),
+      d.scoring === 'score' ? setRow('목표 점수', '먼저 이 점수에 닿으면 끝', h('span', { class: 'cz-inline' }, seg(d.useTarget ? 'y' : 'n', [['n', '없음'], ['y', '있음']], (v) => { d.useTarget = v === 'y'; rd(); }), d.useTarget ? stepper(d.target, 1, 99, (v) => { d.target = v; rd(); }) : null)) : null,
+      d.scoring === 'sets' ? setRow('세트 수', `${Math.ceil(d.sets / 2)}세트를 먼저 따면 승리`, seg(d.sets, [[1, '단판'], [3, '3세트'], [5, '5세트']].map(([v, n]) => [v, n, lock.scoring && v !== d.sets]), (v) => { d.sets = v; rd(); })) : null),
+    h('div', { class: 'cz-sec' }, h('b', { class: 'cz-sec-t' }, '경기장'),
+      setRow('경기장 수', '경기를 경기장에 차례로 자동 배치해요', stepper(d.courts, 1, 8, (v) => { d.courts = v; rd(); })))];
 }
 
-/* ---------- 팀 나누기 ---------- */
-function randomTeams(nums, T, mode) {
-  const list = nums.map(stu).filter(Boolean);
-  const boys = shuffle(list.filter((s) => s.gender === '남')), girls = shuffle(list.filter((s) => s.gender === '여')), etc = shuffle(list.filter((s) => s.gender !== '남' && s.gender !== '여'));
-  const teams = Array.from({ length: T }, () => []);
-  if (mode === 'sep' && boys.length && girls.length && T >= 2) {
-    let Tb = 1, bs = Infinity;
-    for (let k = 1; k < T; k++) { const sc = Math.abs(boys.length / k - girls.length / (T - k)); if (sc < bs) { bs = sc; Tb = k; } }
-    boys.forEach((s, i) => teams[i % Tb].push(s.num));
-    girls.forEach((s, i) => teams[Tb + (i % (T - Tb))].push(s.num));
-    etc.forEach((s) => teams.slice().sort((a, b) => a.length - b.length)[0].push(s.num));
-  } else if (mode === 'equal') {
-    let k = 0; const ord = shuffle(Array.from({ length: T }, (_, i) => i));
-    [...boys, ...girls, ...etc].forEach((s) => { teams[ord[k % T]].push(s.num); k++; });
-  } else shuffle(list).forEach((s, i) => teams[i % T].push(s.num));
-  return teams.map((t) => t.sort((a, b) => a - b));
-}
-
-/* ---------- 새 대회 만들기 (단계별) ---------- */
-function newWizard() {
-  return { step: 1, kind: null, unit: null, classes: 4, classNames: [], name: '', pts: { w: 3, d: 1, l: 0 }, double: false, scoring: 'score', target: 11, courts: 1, third: true,
-    sel: roster().map((s) => s.num), teamN: 4, assign: 'random', gmode: 'equal', teams: null, pick: null };
-}
-function wizardView(redraw) {
-  const W = C.wiz;
-  const steps = ['대회 방식', '참가 형태', '경기 설정', W.unit === 'team' ? '팀 구성' : W.unit === 'class' ? '반 이름' : '참가자'];
-  const head = h('div', { class: 'cz-steps' }, steps.map((n, i) => h('span', { class: 'cz-step' + (W.step === i + 1 ? ' on' : W.step > i + 1 ? ' done' : '') }, `${i + 1}. ${n}`)));
-  const card = h('div', { class: 'card cz-wiz' }, h('div', { class: 'row', style: 'justify-content:space-between;margin-bottom:10px' }, h('h3', { style: 'margin:0' }, '새 대회 추가'),
-    h('button', { class: 'sm ghost', onclick: () => { C.wiz = null; redraw(); } }, '취소')), head);
-  const nav = (back, next, nextLabel, ok) => h('div', { class: 'row', style: 'justify-content:space-between;margin-top:18px' },
-    back ? h('button', { onclick: back }, '← 이전') : h('span'), next ? h('button', { class: 'primary', disabled: ok === false, onclick: next }, nextLabel || '다음 →') : null);
-  const big = (cur, v, title, desc, on) => h('button', { class: 'cz-big' + (cur === v ? ' on' : ''), onclick: () => on(v) }, h('b', null, title), h('span', null, desc));
-  if (W.step === 1) {
-    card.append(h('div', { class: 'cz-bigs' },
-      big(W.kind, 'league', '리그', '모두가 서로 한 번씩(또는 두 번씩) 경기해서 승점으로 순위를 정해요.', (v) => { W.kind = v; W.step = 2; redraw(); }),
-      big(W.kind, 'cup', '토너먼트', '지면 탈락! 이긴 쪽이 다음 경기로 올라가요.', (v) => { W.kind = v; W.step = 2; redraw(); })));
-  } else if (W.step === 2) {
-    card.append(h('div', { class: 'cz-bigs' },
-      big(W.unit, 'solo', '개인 대회', '명렬표의 학생 한 명 한 명이 참가해요.', (v) => { W.unit = v; redraw(); }),
-      big(W.unit, 'team', '팀 대회', '명렬표 학생들로 팀을 만들어 참가해요.', (v) => { W.unit = v; redraw(); }),
-      big(W.unit, 'class', '반대항', '반끼리 겨뤄요.', (v) => { W.unit = v; redraw(); })));
-    if (W.unit === 'class') card.append(h('div', { class: 'field', style: 'margin-top:14px' }, h('label', null, '반 숫자'),
-      h('input', { type: 'number', min: 2, max: 30, value: W.classes, class: 'cz-num', onchange: (e) => { W.classes = Math.max(2, Math.min(30, Number(e.target.value) | 0 || 2)); redraw(); } }),
-      h('span', { class: 'muted', style: 'margin-left:8px' }, '개 반')));
-    if ((W.unit === 'solo' || W.unit === 'team') && !roster().length) card.append(h('div', { class: 'banner warn', style: 'margin-top:12px' }, '명렬표가 비어 있어요. 학급 기초설정에서 먼저 입력해 주세요.'));
-    card.append(nav(() => { W.step = 1; redraw(); }, () => { W.step = 3; redraw(); }, null, !!W.unit && (W.unit === 'class' || roster().length >= 2)));
-  } else if (W.step === 3) {
-    const nameIn = h('input', { value: W.name, placeholder: '예: 피구, 줄넘기, 탁구', maxlength: 30, oninput: (e) => { W.name = e.target.value; nextBtn.disabled = !W.name.trim(); } });
-    const ptIn = (k, label) => h('label', { class: 'cz-pt' }, label, h('input', { type: 'number', value: W.pts[k], class: 'cz-num', onchange: (e) => { W.pts[k] = Number(e.target.value) || 0; } }), '점');
-    const radio = (name, cur, items, on) => h('div', { class: 'radios' }, items.map(([v, n]) => h('label', null, h('input', { type: 'radio', name, checked: cur === v, onchange: () => on(v) }), n)));
-    card.append(...[
-      h('div', { class: 'field' }, h('label', null, '종목 이름'), nameIn),
-      W.kind === 'league' ? h('div', { class: 'field' }, h('label', null, '승점'), h('div', { class: 'row', style: 'gap:14px;flex-wrap:wrap' }, ptIn('w', '승리'), ptIn('d', '무승부'), ptIn('l', '패배'))) : null,
-      W.kind === 'league' ? h('div', { class: 'field' }, h('label', null, '리그 방식'), radio('cz-dbl', W.double, [[false, '싱글 (1회전)'], [true, '더블 (2회전)']], (v) => { W.double = v; redraw(); })) : null,
-      h('div', { class: 'field' }, h('label', null, '점수 기록 방식'), radio('cz-sc', W.scoring, [['score', '득점/실점 기록'], ['target', '목표 점수']], (v) => { W.scoring = v; redraw(); }),
-        W.scoring === 'target' ? h('div', { class: 'row', style: 'gap:6px;margin-top:6px' }, '먼저', h('input', { type: 'number', min: 1, value: W.target, class: 'cz-num', onchange: (e) => { W.target = Math.max(1, Number(e.target.value) | 0 || 11); } }), '점을 내면 이겨요') : null),
-      h('div', { class: 'field' }, h('label', null, '운영 경기장 수'), h('div', { class: 'row', style: 'gap:6px' },
-        h('input', { type: 'number', min: 1, max: 20, value: W.courts, class: 'cz-num', onchange: (e) => { W.courts = Math.max(1, Math.min(20, Number(e.target.value) | 0 || 1)); } }), '곳'),
-        h('div', { class: 'muted', style: 'margin-top:4px' }, '동시에 경기할 수 있는 곳의 수예요. 경기를 경기장마다 골고루 나눠요.')),
-      W.kind === 'cup' ? h('div', { class: 'field' }, h('label', { class: 'row', style: 'gap:6px;font-weight:400;cursor:pointer' }, h('input', { type: 'checkbox', checked: W.third, onchange: (e) => { W.third = e.target.checked; } }), '3·4위전 하기')) : null].filter(Boolean));
-    const nextBtn = h('button', { class: 'primary', disabled: !W.name.trim(), onclick: () => { W.name = W.name.trim(); W.step = 4; redraw(); } }, '다음 →');
-    card.append(h('div', { class: 'row', style: 'justify-content:space-between;margin-top:18px' }, h('button', { onclick: () => { W.step = 2; redraw(); } }, '← 이전'), nextBtn));
-  } else {
-    card.append(W.unit === 'solo' ? soloPick(redraw) : W.unit === 'team' ? teamPick(redraw) : classPick(redraw));
-    const n = W.unit === 'solo' ? W.sel.length : W.unit === 'team' ? (W.teams || []).filter((t) => t.members.length).length : W.classes;
-    const bad = W.unit === 'team' && (!W.teams || W.teams.some((t) => !t.members.length));
-    card.append(h('div', { class: 'row', style: 'justify-content:space-between;margin-top:18px' }, h('button', { onclick: () => { W.step = 3; redraw(); } }, '← 이전'),
-      h('div', { class: 'row', style: 'gap:8px' }, bad ? h('span', { class: 'muted' }, '빈 팀이 없어야 해요') : null,
-        h('button', { class: 'primary', disabled: n < 2 || bad, onclick: () => create(redraw) }, `대회 만들기 (${n}${W.unit === 'solo' ? '명' : W.unit === 'team' ? '팀' : '반'})`))));
-  }
-  return card;
-}
-function soloPick(redraw) {
-  const W = C.wiz, sel = new Set(W.sel);
-  return h('div', null, h('div', { class: 'field' }, h('label', null, `참가 학생 (${sel.size}명)`),
-    h('div', { class: 'muted', style: 'margin-bottom:6px' }, '누르면 빠지거나 다시 들어가요.'),
-    h('div', { class: 'cz-pool' }, roster().map((s) => h('button', { class: 'cz-chip ' + gcls(s.gender) + (sel.has(s.num) ? '' : ' off'), onclick: () => { sel.has(s.num) ? sel.delete(s.num) : sel.add(s.num); W.sel = [...sel].sort((a, b) => a - b); redraw(); } }, s.name))),
-    h('div', { class: 'row', style: 'gap:6px;margin-top:8px' }, h('button', { class: 'sm', onclick: () => { W.sel = roster().map((s) => s.num); redraw(); } }, '모두 넣기'), h('button', { class: 'sm', onclick: () => { W.sel = []; redraw(); } }, '모두 빼기'))));
-}
-function classPick(redraw) {
-  const W = C.wiz;
-  for (let i = 0; i < W.classes; i++) if (!W.classNames[i]) W.classNames[i] = `${i + 1}반`;
-  W.classNames.length = W.classes;
-  return h('div', { class: 'field' }, h('label', null, '반 이름'), h('div', { class: 'muted', style: 'margin-bottom:6px' }, '필요하면 이름을 바꿔요. (예: 4-1)'),
-    h('div', { class: 'cz-names' }, W.classNames.map((n, i) => h('input', { value: n, maxlength: 12, oninput: (e) => { W.classNames[i] = e.target.value; } }))));
-}
-function teamPick(redraw) {
-  const W = C.wiz, all = roster();
-  const radio = (name, cur, items, on) => h('div', { class: 'radios' }, items.map(([v, n]) => h('label', null, h('input', { type: 'radio', name, checked: cur === v, onchange: () => on(v) }), n)));
-  const mk = () => {
-    W.teams = Array.from({ length: W.teamN }, (_, i) => ({ name: (W.teams && W.teams[i] && W.teams[i].name) || `${i + 1}팀`, members: [] }));
-    if (W.assign === 'random') randomTeams(all.map((s) => s.num).filter((n) => W.sel.includes(n)), W.teamN, W.gmode).forEach((m, i) => { W.teams[i].members = m; });
+/* ---------- 팀 나누기 (만들기·팀 수정에서 같이) ---------- */
+function teamBoard(T, rd, lockCount) {
+  const all = roster(), byNum = (n) => all.find((s) => s.num === n);
+  const inTeam = new Set(T.teams.flatMap((t) => t.members));
+  T.pool = T.pool.filter((n) => !inTeam.has(n) && byNum(n));
+  const setCount = (k) => { T.teams = k > T.teams.length ? [...T.teams, ...Array.from({ length: k - T.teams.length }, (_, i) => ({ id: uid(), name: `${T.teams.length + i + 1}팀`, members: [] }))] : T.teams.slice(0, k); if (k < T.teams.length) return; rd(); };
+  const moveTo = (to, n) => { T.teams.forEach((t) => { t.members = t.members.filter((x) => x !== n); }); T.pool = T.pool.filter((x) => x !== n); if (to === 'pool') T.pool.push(n); else { const t = T.teams.find((x) => x.id === to); if (t) t.members.push(n); } T.pick = null; rd(); };
+  const randomAssign = () => {
+    const ids = [...T.teams.flatMap((t) => t.members), ...T.pool], N = T.teams.length, mem = T.teams.map(() => []);
+    const ms = shuffle(ids.filter((i) => (byNum(i) || {}).gender === '남')), fs = shuffle(ids.filter((i) => (byNum(i) || {}).gender === '여')), rest = shuffle(ids.filter((i) => !['남', '여'].includes((byNum(i) || {}).gender)));
+    const put = (id, from, to) => { let best = [], min = 1e9; for (let i = from; i < to; i++) { if (mem[i].length < min) { min = mem[i].length; best = [i]; } else if (mem[i].length === min) best.push(i); } mem[best[Math.floor(Math.random() * best.length)]].push(id); };
+    if (T.gmode === 'sep' && N >= 2 && ms.length && fs.length) { const tm = Math.min(N - 1, Math.max(1, Math.round(N * ms.length / (ms.length + fs.length)))); ms.forEach((id) => put(id, 0, tm)); fs.forEach((id) => put(id, tm, N)); }
+    else if (T.gmode === 'none') shuffle([...ms, ...fs]).forEach((id) => put(id, 0, N));
+    else { ms.forEach((id) => put(id, 0, N)); fs.forEach((id) => put(id, 0, N)); }
+    rest.forEach((id) => put(id, 0, N));
+    T.teams.forEach((t, i) => { t.members = mem[i].sort((a, b) => a - b); }); T.pool = []; rd();
   };
-  if (!W.teams || W.teams.length !== W.teamN) mk();
-  const inTeam = new Set(W.teams.flatMap((t) => t.members));
-  const pool = all.filter((s) => W.sel.includes(s.num) && !inTeam.has(s.num));
-  const moveTo = (ti, n) => { W.teams.forEach((t) => { t.members = t.members.filter((x) => x !== n); }); if (ti >= 0) { W.teams[ti].members.push(n); W.teams[ti].members.sort((a, b) => a - b); } W.pick = null; redraw(); };
-  const chip = (s) => {
-    const el = h('button', { class: 'cz-chip ' + gcls(s.gender) + (W.pick === s.num ? ' pick' : ''), draggable: 'true', onclick: (e) => { e.stopPropagation(); W.pick = W.pick === s.num ? null : s.num; redraw(); } }, s.name);
-    el.addEventListener('dragstart', (e) => { e.dataTransfer.setData('text/plain', String(s.num)); });
-    return el;
-  };
-  const drop = (el, ti) => {
-    el.addEventListener('dragover', (e) => { e.preventDefault(); el.classList.add('over'); });
-    el.addEventListener('dragleave', () => el.classList.remove('over'));
-    el.addEventListener('drop', (e) => { e.preventDefault(); el.classList.remove('over'); const n = Number(e.dataTransfer.getData('text/plain')); if (n) moveTo(ti, n); });
-    el.addEventListener('click', () => { if (W.pick != null) moveTo(ti, W.pick); });
-    return el;
-  };
-  const cnt = (t) => { const ss = t.members.map(stu).filter(Boolean); return `${ss.length}명 · 남${ss.filter((s) => s.gender === '남').length} 여${ss.filter((s) => s.gender === '여').length}`; };
+  const gc = (ids) => { const g = (k) => ids.filter((n) => (byNum(n) || {}).gender === k).length; return h('span', { class: 'cz-gc' }, h('b', { class: 'm' }, '남 ' + g('남')), h('b', { class: 'f' }, '여 ' + g('여'))); };
+  const chip = (n) => { const s = byNum(n); if (!s) return null;
+    const el = h('span', { class: 'cz-chip ' + gcls(s.gender) + (T.pick === n ? ' pick' : ''), draggable: 'true', onclick: (e) => { e.stopPropagation(); T.pick = T.pick === n ? null : n; rd(); } }, h('small', null, s.num), s.name);
+    el.addEventListener('dragstart', (e) => { e.dataTransfer.setData('text/plain', String(n)); });
+    return el; };
+  const drop = (el, to) => {
+    el.addEventListener('dragover', (e) => { e.preventDefault(); el.classList.add('drop'); });
+    el.addEventListener('dragleave', () => el.classList.remove('drop'));
+    el.addEventListener('drop', (e) => { e.preventDefault(); el.classList.remove('drop'); const n = Number(e.dataTransfer.getData('text/plain')); if (n) moveTo(to, n); });
+    el.addEventListener('click', () => { if (T.pick != null) moveTo(to, T.pick); });
+    return el; };
   return h('div', null,
-    h('div', { class: 'field' }, h('label', null, '팀 수'), h('div', { class: 'row', style: 'gap:6px' },
-      h('input', { type: 'number', min: 2, max: Math.max(2, all.length), value: W.teamN, class: 'cz-num', onchange: (e) => { W.teamN = Math.max(2, Math.min(Math.max(2, all.length), Number(e.target.value) | 0 || 2)); W.teams = null; redraw(); } }), '팀')),
-    h('div', { class: 'field' }, h('label', null, '팀 배분 방식'), radio('cz-as', W.assign, [['random', '랜덤 배정'], ['manual', '지정 배정']], (v) => { W.assign = v; W.teams = null; redraw(); })),
-    W.assign === 'random' ? h('div', { class: 'field' }, h('label', null, '성별 조건'), radio('cz-g', W.gmode, [['equal', '남녀 동비율'], ['sep', '남녀 따로'], ['none', '성별 무시']], (v) => { W.gmode = v; W.teams = null; redraw(); }),
-      h('button', { class: 'sm', style: 'margin-top:6px', onclick: () => { mk(); redraw(); } }, '다시 섞기')) : null,
-    h('div', { class: 'muted', style: 'margin:4px 0 8px' }, '이름을 누른 뒤 옮길 팀을 누르거나, 끌어서 놓으면 옮겨져요. 팀 이름도 바꿀 수 있어요.'),
-    drop(h('div', { class: 'cz-pool cz-unassigned' }, h('div', { class: 'cz-pool-t' }, `팀 없음 (${pool.length}명)`), pool.length ? pool.map(chip) : h('span', { class: 'muted' }, '모두 팀에 들어갔어요')), -1),
-    h('div', { class: 'cz-teams' }, W.teams.map((t, i) => drop(h('div', { class: 'cz-team' + (W.pick != null ? ' target' : '') },
-      h('div', { class: 'cz-team-h' }, h('input', { value: t.name, maxlength: 12, onclick: (e) => e.stopPropagation(), oninput: (e) => { t.name = e.target.value; } }), h('span', { class: 'muted' }, cnt(t))),
-      h('div', { class: 'cz-team-m' }, t.members.map(stu).filter(Boolean).map(chip))), i))));
-}
-async function create(redraw) {
-  const W = C.wiz;
-  let teams;
-  if (W.unit === 'solo') teams = W.sel.map(stu).filter(Boolean).map((s) => ({ name: s.name, members: [s.num] }));
-  else if (W.unit === 'team') teams = W.teams.filter((t) => t.members.length).map((t, i) => ({ name: (t.name || '').trim() || `${i + 1}팀`, members: t.members.slice() }));
-  else teams = W.classNames.map((n, i) => ({ name: (n || '').trim() || `${i + 1}반`, members: [] }));
-  const order = W.kind === 'cup' ? shuffle(teams) : teams;
-  const c = { id: uid(), name: W.name, kind: W.kind, unit: W.unit, created: Date.now(),
-    cfg: { pts: { ...W.pts }, double: W.double, scoring: W.scoring, target: W.target, courts: W.courts, third: W.third }, teams: order,
-    matches: W.kind === 'league' ? leagueMatches(order.length, W.double, W.courts) : cupMatches(order.length, W.third) };
-  resolve(c);
-  const p = progress(c);
-  C.cache[c.id] = c;
-  C.index.list.push({ id: c.id, name: c.name, kind: c.kind, unit: c.unit, created: c.created, done: p.done, total: p.total });
-  C.index.cur = C.cur = c.id; C.wiz = null; C.view = 'bracket';
-  try { await APP.kvSet(keyOf(c.id), pack(c)); await APP.kvSet('contest:index', C.index); toast('대회를 만들었어요'); } catch (e) { toast(errMsg(e), true); }
-  redraw();
+    lockCount ? null : setRow('팀 수', '', stepper(T.teams.length, 2, 32, setCount)),
+    h('div', { class: 'cz-auto' }, seg(T.gmode, [['equal', '남녀 동비율'], ['sep', '남녀 따로'], ['none', '성별 무시']], (v) => { T.gmode = v; rd(); }),
+      h('button', { class: 'sm primary', type: 'button', onclick: randomAssign, title: '누를 때마다 다시 섞어요' }, '🎲 랜덤 배정'),
+      h('button', { class: 'sm', type: 'button', onclick: () => { T.pool = [...T.pool, ...T.teams.flatMap((t) => t.members)]; T.teams.forEach((t) => { t.members = []; }); rd(); } }, '모두 빼기')),
+    h('div', { class: 'muted', style: 'font-size:13px;margin:6px 0' }, '이름을 누른 뒤 팀 칸을 누르거나, 끌어서 놓으면 옮겨져요. (지정 배정)'),
+    drop(h('div', { class: 'cz-pool' }, h('div', { class: 'cz-pool-h' }, h('b', null, '미배정'), h('span', { class: 'muted' }, `${T.pool.length}명`), gc(T.pool)),
+      T.pool.length ? h('div', { class: 'cz-chips' }, T.pool.map(chip)) : h('span', { class: 'muted', style: 'font-size:13px' }, '모두 팀에 들어갔어요')), 'pool'),
+    h('div', { class: 'cz-teams' }, T.teams.map((t, i) => drop(h('div', { class: 'cz-team' + (T.pick != null ? ' target' : '') },
+      h('div', { class: 'cz-team-h' }, h('input', { value: t.name, maxlength: 12, 'aria-label': `${i + 1}번째 팀 이름`, onclick: (e) => e.stopPropagation(), oninput: (e) => { t.name = e.target.value; } }), gc(t.members)),
+      t.members.length ? h('div', { class: 'cz-chips' }, t.members.map(chip)) : h('em', { class: 'muted' }, '여기에 학생을 넣어요')), t.id))));
 }
 
-/* ---------- 대회 화면 ---------- */
-function titleBar(c) {
-  const p = progress(c);
-  const el = h('div', { class: 'cz-title' },
-    h('div', { class: 'cz-fill', style: `width:${p.pct}%` }),
-    h('div', { class: 'cz-title-in' },
-      h('span', { class: 'cz-tags' }, h('span', { class: 'cz-tag' }, KIND[c.kind]), h('span', { class: 'cz-tag' }, UNIT[c.unit])),
-      h('b', { class: 'cz-name' }, c.name),
-      h('span', { class: 'cz-pct' }, p.total ? `${p.done}/${p.total}경기 · ${p.pct}%` : '')));
-  if (p.total && p.done === p.total) el.classList.add('fin');
-  return el;
+/* ---------- 대회 만들기 ---------- */
+function wizard(onCreate) {
+  const d = { name: '', format: 'league', legs: 1, pts: { w: 3, d: 1, l: 0 }, draw: true, tie: 'diff', third: false, seed: 'random', scoring: 'score', useTarget: false, target: 11, sets: 3, courts: 1, unit: 'individual', classes: 4, classNames: [] };
+  const people = new Set(roster().map((s) => s.num));
+  const T = { teams: [1, 2, 3, 4].map((n) => ({ id: uid(), name: `${n}팀`, members: [] })), pool: roster().map((s) => s.num), gmode: 'equal', pick: null };
+  let step = 0;
+  const STEPS = ['대회 방식', '참가 단위', '경기 규칙', '참가자'];
+  const body = h('div'), foot = h('div', { class: 'cz-foot-in' });
+  const dl = dialog('대회 만들기', body, foot, 'wide');
+  const entrants = () => {
+    if (d.unit === 'individual') return roster().filter((s) => people.has(s.num)).map((s) => ({ id: 'e' + s.num, name: s.name, sub: s.num + '번', members: [s.num] }));
+    if (d.unit === 'class') return Array.from({ length: d.classes }, (_, i) => ({ id: 'c' + i, name: (d.classNames[i] || '').trim() || `${i + 1}반`, members: [] }));
+    return T.teams.map((t) => ({ id: t.id, name: (t.name || '').trim() || '이름 없는 팀', members: t.members.slice() }));
+  };
+  const rd = () => {
+    const isL = d.format === 'league';
+    const big = (key, val, title, desc) => h('button', { type: 'button', class: 'cz-opt' + (d[key] === val ? ' on' : ''), onclick: () => { d[key] = val; rd(); } }, h('b', null, title), h('span', null, desc));
+    const steps = h('div', { class: 'cz-steps' }, STEPS.map((n, i) => h('span', { class: 'cz-stp' + (i === step ? ' on' : i < step ? ' done' : '') }, h('i', null, i + 1), n)));
+    let content;
+    if (step === 0) {
+      const nm = h('input', { value: d.name, placeholder: '예: 5학년 피구 리그', maxlength: 30, oninput: (e) => { d.name = e.target.value; nextBtn.disabled = !d.name.trim(); } });
+      setTimeout(() => nm.focus(), 0);
+      content = h('div', null, h('div', { class: 'field' }, h('label', null, '대회 이름 (종목)'), nm),
+        h('div', { class: 'cz-opts' }, big('format', 'league', '리그', '모든 참가자가 서로 겨루고 승점으로 순위를 정해요'), big('format', 'tournament', '토너먼트', '지면 탈락, 이기면 다음 경기로 올라가요')));
+    } else if (step === 1) {
+      content = h('div', null, h('div', { class: 'cz-opts three' }, big('unit', 'individual', '개인', '학생 한 명 한 명이 참가해요'), big('unit', 'team', '팀', '학생들을 모아 팀을 만들어요'), big('unit', 'class', '반대항', '반끼리 겨뤄요')),
+        d.unit === 'class' ? setRow('반 숫자', '', stepper(d.classes, 2, 30, (v) => { d.classes = v; rd(); })) : null,
+        d.unit !== 'class' && roster().length < 2 ? h('div', { class: 'banner warn' }, '명렬표가 비어 있어요. 학급 기초설정에서 먼저 입력해 주세요.') : null);
+    } else if (step === 2) content = h('div', null, rulesBody(d, rd, isL, {}));
+    else {
+      if (d.unit === 'individual') content = h('div', null, h('div', { class: 'cz-pool-h' }, h('b', null, '참가 학생'), h('span', { class: 'muted' }, `${people.size}명 · 누르면 빠지거나 들어가요`),
+        h('button', { class: 'sm', type: 'button', onclick: () => { roster().forEach((s) => people.add(s.num)); rd(); } }, '모두'), h('button', { class: 'sm', type: 'button', onclick: () => { people.clear(); rd(); } }, '없음')),
+        h('div', { class: 'cz-chips grid' }, roster().map((s) => h('button', { type: 'button', class: 'cz-chip ' + gcls(s.gender) + (people.has(s.num) ? '' : ' off'), onclick: () => { people.has(s.num) ? people.delete(s.num) : people.add(s.num); rd(); } }, h('small', null, s.num), s.name))));
+      else if (d.unit === 'team') content = teamBoard(T, rd, false);
+      else { for (let i = 0; i < d.classes; i++) if (!d.classNames[i]) d.classNames[i] = `${i + 1}반`;
+        content = h('div', null, h('div', { class: 'muted', style: 'margin-bottom:6px' }, '필요하면 반 이름을 바꿔요. (예: 4-1)'), h('div', { class: 'cz-names' }, d.classNames.slice(0, d.classes).map((n, i) => h('input', { value: n, maxlength: 12, oninput: (e) => { d.classNames[i] = e.target.value; } })))); }
+      const es = entrants(), n = es.length, P = n >= 2 ? seedsFor(n).length : 0;
+      const games = isL ? (n * (n - 1) / 2) * d.legs : Math.max(0, n - 1) + (d.third && n >= 4 ? 1 : 0);
+      const emptyT = d.unit === 'team' && T.teams.some((t) => !t.members.length);
+      content.append(h('p', { class: 'cz-note' }, n < 2 ? '참가자를 둘 이상 골라 주세요.' : emptyT ? '빈 팀이 있어요. 학생을 넣거나 팀 수를 줄여 주세요.' : `참가 ${n}${d.unit === 'class' ? '반' : d.unit === 'team' ? '팀' : '명'} · 모두 ${games}경기${!isL && P > n ? ` · 부전승 ${P - n}` : ''}`));
+    }
+    body.replaceChildren(steps, h('div', { class: 'cz-wbody' }, content));
+    const ok = [!!d.name.trim(), true, true, (() => { const es = entrants(); return es.length >= 2 && !(d.unit === 'team' && T.teams.some((t) => !t.members.length)); })()][step];
+    var nextBtn = h('button', { class: 'primary', disabled: !ok, onclick: () => { if (step < 3) { step++; rd(); } else create(); } }, step < 3 ? '다음' : '대회 만들기');
+    foot.replaceChildren(h('div', null, step > 0 ? h('button', { onclick: () => { step--; rd(); } }, '이전') : null), h('div', { class: 'row', style: 'gap:6px' }, h('button', { onclick: dl.close }, '취소'), nextBtn));
+  };
+  const create = () => {
+    let es = entrants(); const isL = d.format === 'league';
+    if (!isL && d.seed === 'random') es = shuffle(es);
+    es = es.map((e, i) => ({ ...e, id: 'e' + i }));
+    const c = { id: uid(), name: d.name.trim(), format: d.format, unit: d.unit, created: Date.now(), legs: d.legs, pts: { ...d.pts }, draw: isL && d.draw, tie: d.scoring === 'wdl' ? 'h2h' : d.tie, third: d.third,
+      scoring: d.scoring, target: d.scoring === 'score' && d.useTarget ? d.target : null, sets: d.sets, courts: d.courts, entrants: es, res: {}, out: {}, big: {}, live: {} };
+    const ids = es.map((_, i) => i);
+    if (isL) c.matches = leagueMatches(ids.length, d.legs); else c.slots = makeSlots(ids);
+    dl.close(); onCreate(c);
+  };
+  rd();
 }
-function scoreBox(c, m, redraw) {
-  const done = !!m.w, target = c.cfg.scoring === 'target' ? c.cfg.target : null;
-  const inp = (side) => h('input', { type: 'number', inputmode: 'numeric', min: 0, class: 'cz-sc', value: side === 'a' ? (m.sa ?? '') : (m.sb ?? ''), placeholder: '-',
-    onchange: (e) => {
-      const v = num(e.target.value);
-      if (side === 'a') m.sa = v; else m.sb = v;
-      // 목표 점수 방식: 한쪽만 목표 점수를 넣고 다른 쪽이 비어 있으면 그대로 두기
-      resolve(c); save(c); redraw();
-    } });
-  const nm = (i) => (i === -1 ? '부전승' : i == null ? '(대기)' : c.teams[i].name);
-  const cls = (side) => 'cz-side' + (m.w === (side === 'a' ? 1 : 2) ? ' win' : m.w && m.w !== 3 ? ' lose' : '');
-  const tie = c.kind === 'cup' && real(m) && m.sa != null && m.sb != null && m.sa === m.sb;
-  return h('div', { class: 'cz-match' + (done ? ' done' : '') + (m.k === 'third' ? ' third' : '') },
-    h('div', { class: cls('a') }, h('span', { class: 'cz-tn' }, nm(m.a)), real(m) ? inp('a') : null),
-    h('div', { class: cls('b') }, h('span', { class: 'cz-tn' }, nm(m.b)), real(m) ? inp('b') : null),
-    tie ? h('div', { class: 'cz-tie' }, '동점! 이긴 쪽:', h('button', { class: 'sm' + (m.p === 1 ? ' primary' : ''), onclick: () => { m.p = 1; resolve(c); save(c); redraw(); } }, nm(m.a)), h('button', { class: 'sm' + (m.p === 2 ? ' primary' : ''), onclick: () => { m.p = 2; resolve(c); save(c); redraw(); } }, nm(m.b))) : null,
-    target && real(m) && !done ? h('div', { class: 'cz-hint' }, `먼저 ${target}점`) : null);
+
+/* ---------- 설정 고치기 ---------- */
+function editDialog(c, onSave) {
+  const played = Object.keys(c.res).length > 0, isL = c.format === 'league', hasDraw = Object.values(c.res).some((r) => r && r.w === 'd');
+  const d = { name: c.name, legs: c.legs, pts: { ...c.pts }, draw: !!c.draw, tie: c.tie, third: !!c.third, scoring: c.scoring, useTarget: !!c.target, target: c.target || 11, sets: c.sets || 3, courts: c.courts };
+  const body = h('div'); const foot = h('div', { class: 'cz-foot-in' });
+  const dl = dialog('대회 설정', body, foot);
+  const rd = () => {
+    body.replaceChildren(h('p', { class: 'muted', style: 'margin:0 0 10px' }, played ? '경기 기록이 있어서 일부 항목은 바꿀 수 없어요. 승점 같은 규칙은 바꾸면 지금까지의 기록에도 바로 적용돼요.' : '아직 기록이 없어서 모든 규칙을 바꿀 수 있어요.'),
+      h('div', { class: 'field' }, h('label', null, '대회 이름'), h('input', { value: d.name, maxlength: 30, oninput: (e) => { d.name = e.target.value; } })),
+      ...rulesBody(d, rd, isL, { edit: true, legs: played, scoring: played, noDraw: hasDraw }));
+    foot.replaceChildren(h('div'), h('div', { class: 'row', style: 'gap:6px' }, h('button', { onclick: dl.close }, '취소'), h('button', { class: 'primary', onclick: () => {
+      if (!d.name.trim()) return toast('대회 이름을 넣어 주세요', true);
+      c.name = d.name.trim(); c.pts = d.pts; c.courts = d.courts; c.tie = (played ? c.scoring : d.scoring) === 'wdl' ? 'h2h' : d.tie;
+      if (isL) c.draw = d.draw; else c.third = d.third;
+      c.target = (played ? c.scoring : d.scoring) === 'score' && d.useTarget ? d.target : null;
+      if (!played) { c.scoring = d.scoring; c.sets = d.sets; if (isL && d.legs !== c.legs) { c.legs = d.legs; c.matches = leagueMatches(c.entrants.length, d.legs); c.live = {}; } }
+      dl.close(); onSave();
+    } }, '저장')));
+  };
+  rd();
 }
-function leagueBracket(c, redraw) {
-  const K = Math.max(1, c.cfg.courts), slots = [...new Set(c.matches.map((m) => m.s))].sort((a, b) => a - b);
-  const curSlot = slots.find((s) => c.matches.some((m) => m.s === s && !m.w));
-  return h('div', { class: 'cz-sched' }, slots.map((s) => {
-    const ms = c.matches.filter((m) => m.s === s).sort((a, b) => a.c - b.c);
-    const all = ms.every((m) => m.w);
-    return h('div', { class: 'cz-slot' + (all ? ' done' : '') + (s === curSlot ? ' now' : '') },
-      h('div', { class: 'cz-slot-h' }, `${s + 1}차`, s === curSlot ? h('span', { class: 'cz-now' }, '지금') : null),
-      h('div', { class: 'cz-slot-ms', style: `--k:${Math.min(K, 4)}` }, ms.map((m) => h('div', null, K > 1 ? h('div', { class: 'cz-court' }, `${m.c + 1}경기장`) : null, scoreBox(c, m, redraw)))));
-  }));
+
+/* ---------- 경기 결과 적기 ---------- */
+function resultDialog(c, m, nm, onSave) {
+  const r = m.res, needWinner = c.format !== 'league' || !c.draw;
+  let sa = r && r.sa != null ? r.sa : 0, sb = r && r.sb != null ? r.sb : 0;
+  const max = c.scoring === 'sets' ? Math.ceil(c.sets / 2) : 999, goal = c.scoring === 'sets' ? max : c.target || 0;
+  const body = h('div'), foot = h('div', { class: 'cz-foot-in' });
+  const title = m.name || `${m.r + 1}라운드`;
+  const dl = dialog(title, body, foot, 'mid');
+  const done = (res) => { dl.close(); onSave(res); };
+  const rd = () => {
+    const head = h('div', { class: 'row', style: 'gap:6px;margin-bottom:6px;justify-content:flex-start' }, m.no ? h('span', { class: 'cz-badge' }, `${m.no}경기`) : null, c.courts > 1 && m.court ? h('span', { class: 'cz-badge' }, `${m.court}경기장`) : null);
+    if (c.scoring === 'wdl') {
+      body.replaceChildren(head, h('div', { class: 'cz-wdl' },
+        h('button', { type: 'button', class: 'cz-opt' + (r && r.w === 'a' ? ' on' : ''), onclick: () => done({ sa: null, sb: null, w: 'a' }) }, h('b', null, nm(m.a)), h('span', null, '승리')),
+        needWinner ? null : h('button', { type: 'button', class: 'cz-opt' + (r && r.w === 'd' ? ' on' : ''), onclick: () => done({ sa: null, sb: null, w: 'd' }) }, h('b', null, '무승부'), h('span', null, ' ')),
+        h('button', { type: 'button', class: 'cz-opt' + (r && r.w === 'b' ? ' on' : ''), onclick: () => done({ sa: null, sb: null, w: 'b' }) }, h('b', null, nm(m.b)), h('span', null, '승리'))));
+    } else {
+      const side = (k) => {
+        const v = k === 'a' ? sa : sb, o = k === 'a' ? sb : sa, set = (x) => { if (k === 'a') sa = x; else sb = x; rd(); };
+        return h('div', { class: 'cz-rside' }, goal ? h('button', { type: 'button', class: 'cz-winbtn' + (v === goal && o < goal ? ' on' : ''), onclick: () => { if (k === 'a') { sa = goal; if (sb >= goal) sb = goal - 1; } else { sb = goal; if (sa >= goal) sa = goal - 1; } rd(); } }, `${nm(m[k])} 승리`) : h('b', { class: 'cz-rnm' }, nm(m[k])),
+          stepper(v, 0, max, set, 'big'));
+      };
+      body.replaceChildren(...[head, h('div', { class: 'cz-rgrid' }, side('a'), h('span', { class: 'cz-colon' }, ':'), side('b')),
+        h('p', { class: 'muted', style: 'text-align:center;margin:10px 0 0;font-size:13px' }, c.scoring === 'sets' ? `${c.sets}세트 경기 · ${max}세트 먼저` : c.target ? `목표 ${c.target}점 · '승리' 버튼을 누르면 이긴 쪽에 목표 점수가 들어가요` : ' '),
+        sa === sb && needWinner ? h('p', { class: 'muted', style: 'text-align:center;color:var(--danger);margin:4px 0 0;font-size:13px' }, '비기면 저장할 수 없어요. 이긴 쪽 점수를 더 높게 적어 주세요.') : null].filter(Boolean));
+    }
+    foot.replaceChildren(h('div', null, r ? h('button', { class: 'danger', onclick: () => done(null) }, '기록 지우기') : null),
+      h('div', { class: 'row', style: 'gap:6px' }, h('button', { onclick: dl.close }, '취소'), c.scoring === 'wdl' ? null : h('button', { class: 'primary', disabled: sa === sb && needWinner, onclick: () => done({ sa, sb, w: sa > sb ? 'a' : sb > sa ? 'b' : 'd' }) }, '저장')));
+  };
+  rd();
 }
-function cupBracket(c, redraw) {
-  const maxR = Math.max(...c.matches.filter((m) => m.k !== 'third').map((m) => m.r));
-  const cols = [];
-  for (let r = 0; r <= maxR; r++) {
-    const ms = c.matches.filter((m) => m.r === r && m.k !== 'third');
-    cols.push(h('div', { class: 'cz-col' }, h('div', { class: 'cz-col-h' }, roundName(c, r)),
-      h('div', { class: 'cz-col-ms' }, ms.map((m) => h('div', { class: 'cz-cell' }, !isBye(m) && real(m) && c.cfg.courts > 1 ? h('div', { class: 'cz-court' }, `${m.s + 1}차 · ${m.c + 1}경기장`) : null, scoreBox(c, m, redraw))))));
+/* 결과 적용 (토너먼트는 이 경기에 달린 다음 라운드 기록 정리) */
+function applyRes(c, m, res) {
+  const old = c.res[m.key];
+  if (res) c.res[m.key] = res; else delete c.res[m.key];
+  if (c.format !== 'league' && m.key !== 'third' && (!res || !old || old.w !== res.w)) {
+    const R = Math.round(Math.log2(c.slots.length));
+    for (let rr = m.r + 1; rr < R; rr++) delete c.res[`t${rr}-${m.i >> (rr - m.r)}`];
+    delete c.res.third;
   }
-  const third = c.matches.find((m) => m.k === 'third');
-  return h('div', null, h('div', { class: 'cz-bracket' }, cols),
-    third ? h('div', { class: 'cz-thirdbox' }, h('div', { class: 'cz-col-h' }, '3·4위전'), scoreBox(c, third, redraw)) : null);
+  delete c.live[m.key];
 }
-function standings(c) {
-  if (c.kind === 'league') {
-    const T = leagueTable(c), P = c.cfg.pts;
-    return h('div', { class: 'card' }, h('div', { class: 'muted', style: 'margin-bottom:8px;font-size:13px' }, `승점: 승 ${P.w} · 무 ${P.d} · 패 ${P.l}  |  같으면 득실차 → 득점 순`),
-      h('div', { class: 'cz-tbl-wrap' }, h('table', { class: 'cz-tbl' },
-        h('thead', null, h('tr', null, ['순위', '이름', '경기', '승', '무', '패', '득점', '실점', '득실차', '승점'].map((x) => h('th', null, x)))),
-        h('tbody', null, T.map((t) => h('tr', { class: t.rank <= 3 && t.gp ? 'top' + t.rank : '' }, h('td', null, t.rank), h('td', { class: 'nm' }, t.name), h('td', null, t.gp), h('td', null, t.w), h('td', null, t.d), h('td', null, t.l), h('td', null, t.gf), h('td', null, t.ga), h('td', null, (t.gd > 0 ? '+' : '') + t.gd), h('td', null, h('b', null, t.pts))))))));
+
+/* ---------- 대회 한 개 ---------- */
+function compView(c, redraw) {
+  const isL = c.format === 'league', out = c.out, big = c.big, live = c.live;
+  const nm = (i) => (i != null && c.entrants[i] ? c.entrants[i].name : '미정');
+  const list = allGames(c), shown = C.pend ? list.filter((x) => !x.res) : list;
+  const total = list.length, played = list.filter((x) => x.res).length, pct = total ? Math.round(played / total * 100) : 0;
+  const br = isL ? null : bracket(c), champ = br && br.final.w != null ? nm(br.final.w) : null;
+  const upd = () => { save(c); redraw(); };
+  const open = (x) => { if (x.a != null && x.b != null && !x.bye) resultDialog(c, x, nm, (res) => { applyRes(c, x, res); upd(); }); };
+  const toggle = (kind, i) => {
+    if (c[kind][i]) delete c[kind][i]; else c[kind][i] = true;
+    if (kind === 'big' && !isL && !Object.keys(c.res).length) c.slots = makeSlots(arrangeIds(seedOrder(c.slots), c.big));
+    upd();
+  };
+  // 참가자 메뉴 (불참 · 빅매치 · 팀 수정)
+  const menu = (e, i) => {
+    e.stopPropagation(); document.querySelectorAll('.cz-pop').forEach((p) => p.remove());
+    const pop = h('div', { class: 'cz-pop', style: `left:${Math.min(e.clientX, innerWidth - 220)}px;top:${e.clientY + 6}px` }, h('b', null, nm(i)),
+      h('div', { class: 'cz-pop-btns' },
+        h('button', { type: 'button', class: 'cz-flag out' + (out[i] ? ' on' : ''), onclick: () => { pop.remove(); toggle('out', i); } }, '🚫 불참'),
+        h('button', { type: 'button', class: 'cz-flag big' + (big[i] ? ' on' : ''), onclick: () => { pop.remove(); toggle('big', i); } }, '🔥 빅매치'),
+        c.unit === 'team' ? h('button', { type: 'button', class: 'cz-flag', onclick: () => { pop.remove(); teamEdit(c, upd); } }, '✏️ 팀 수정') : null));
+    document.body.append(pop);
+    setTimeout(() => document.addEventListener('pointerdown', function f(ev) { if (!pop.contains(ev.target)) { pop.remove(); document.removeEventListener('pointerdown', f); } }), 0);
+  };
+  const shuffleIt = () => {
+    if (isL) { const perm = shuffle(c.entrants.map((_, i) => i)); c.matches = leagueMatches(c.entrants.length, c.legs).map((m) => ({ ...m, a: perm[m.a], b: perm[m.b] })); }
+    else c.slots = makeSlots(arrangeIds(shuffle(c.entrants.map((_, i) => i)), big));
+    upd(); toast('대진을 다시 짰어요'); };
+
+  // 머리 카드
+  const head = h('section', { class: 'card cz-det' },
+    h('div', { class: 'cz-dtop' },
+      h('div', { class: 'cz-dnm' }, h('h3', null, c.name), h('span', { class: 'muted' }, `${played} / ${total}경기`)),
+      h('div', { class: 'cz-meta' },
+        h('span', { class: 'cz-badge' }, isL ? (c.legs === 2 ? '리그 · 두 번씩' : '리그') : '토너먼트'), h('span', { class: 'cz-badge' }, UNIT[c.unit]),
+        h('span', { class: 'cz-badge' }, SCORING.find((x) => x[0] === c.scoring)[1] + (c.target ? ` · ${c.target}점` : c.scoring === 'sets' ? ` · ${c.sets}세트` : '')),
+        isL ? h('span', { class: 'cz-badge' }, `승점 ${c.pts.w}${c.draw ? '·' + c.pts.d : ''}·${c.pts.l}`) : null, h('span', { class: 'cz-badge' }, `경기장 ${c.courts}`),
+        !isL ? h('button', { class: 'sm', title: '대진표 모양 바꾸기', onclick: () => { C.bmode = C.bmode === 'h' ? 'v' : 'h'; saveView(); redraw(); } }, C.bmode === 'h' ? '⇄ 가로' : '⇅ 세로') : null,
+        !played ? h('button', { class: 'sm', title: isL ? '경기 순서를 무작위로 다시 짜요' : '대진을 무작위로 다시 짜요', onclick: shuffleIt }, '🔀 대진표 섞기') : null,
+        h('button', { class: 'sm', onclick: () => editDialog(c, upd) }, '⚙ 설정'),
+        h('button', { class: 'sm', disabled: !played, onclick: () => { if (!confirm('경기 기록을 모두 지울까요? 대진과 참가자는 그대로 두고 결과만 지워요.')) return; c.res = {}; c.live = {}; upd(); } }, '기록 초기화'),
+        h('button', { class: 'sm', title: '보관함으로 보내기', onclick: () => { if (!confirm(`'${c.name}' 대회를 보관함으로 보낼까요? 기록은 그대로 남고, 보관함에서 다시 꺼내거나 삭제할 수 있어요.`)) return; c.archived = true; C.cur = null; saveNow(c).then(redraw); } }, '🗄 보관'))),
+    h('div', { class: 'cz-prog' }, bar(pct), h('b', { class: 'cz-pct' }, pct + '%'), champ ? h('span', { class: 'cz-champ' }, `🏆 우승 ${champ}`) : null));
+
+  // 참가자 카드
+  const ent = isL && c.unit === 'individual' ? null : h('section', { class: 'card' }, h('div', { class: 'cz-ch' }, h('b', null, '참가자'), h('span', { class: 'muted' }, c.entrants.length)),
+    h('div', { class: 'cz-ents' + (c.unit === 'team' ? ' team' : '') }, c.entrants.map((e, i) => h('button', { type: 'button', class: 'cz-ent' + (out[i] ? ' out' : '') + (big[i] ? ' big' : ''), onclick: (ev) => menu(ev, i) },
+      big[i] ? h('span', { class: 'fire' }, '🔥') : null, e.sub ? h('small', null, e.sub) : null, h('b', null, e.name),
+      c.unit === 'team' && e.members.length ? h('span', { class: 'cz-mems' }, e.members.map(stu).filter(Boolean).map((s) => h('i', { class: gcls(s.gender) }, s.name))) : null))),
+    h('p', { class: 'muted', style: 'font-size:12px;margin:8px 0 0' }, '이름을 누르면 오늘 불참이나 빅매치를 정할 수 있어요.'));
+
+  // 경기 한 줄
+  const mrow = (x, cvm) => {
+    const lv = live[x.key] && !x.res, ho = !x.res && (out[x.a] || out[x.b]);
+    const pill = h('span', { class: 'cz-live' + (lv ? ' on' : ''), title: '지금 경기 중이면 눌러서 표시해요', onclick: (e) => { e.stopPropagation(); if (live[x.key]) delete live[x.key]; else live[x.key] = true; upd(); } }, `${x.no}경기`);
+    const side = (k) => h('b', { class: 'cz-m' + k + (x.res && x.res.w === k ? ' win' : '') + (out[x[k]] ? ' out' : '') }, nm(x[k]));
+    return h('div', { class: 'cz-mrow' + (x.res ? ' done' : '') + (cvm ? ' cv' : '') + (x.bigm ? ' bigm' : '') + (lv ? ' live' : '') + (ho ? ' hasout' : ''), onclick: () => open(x) },
+      cvm ? h('span', { class: 'cz-mtop' }, pill, x.bigm ? h('span', { class: 'cz-bigtag' }, '🔥 빅매치') : null)
+        : h('span', { class: 'cz-mmeta' }, pill, x.bigm ? h('span', { class: 'cz-bigtag' }, '🔥 빅매치') : h('span', { class: 'cz-badge' }, `${x.r + 1}R`), c.courts > 1 ? h('span', { class: 'cz-badge' }, `${x.court}경기장`) : null),
+      side('a'), h('span', { class: 'cz-msc' + (x.res ? '' : ' vs') }, scText(c, x.res)), side('b'));
+  };
+
+  let main;
+  if (isL) {
+    const rows = standings(c), showFA = c.scoring !== 'wdl';
+    const rankCard = h('section', { class: 'card' }, h('div', { class: 'cz-ch' }, h('b', null, '순위표')),
+      h('div', { class: 'cz-scroll' }, h('table', { class: 'cz-rank' },
+        h('thead', null, h('tr', null, ['순위', '참가자', '경기', '승', ...(c.draw ? ['무'] : []), '패', ...(showFA ? ['득', '실', '차'] : []), '승점'].map((t, k) => h('th', { class: k === 1 ? 'l' : '' }, t)))),
+        h('tbody', null, rows.map((r) => h('tr', { class: r.rank === 1 && r.p > 0 ? 'top' : '' }, h('td', null, r.rank),
+          h('td', { class: 'l' }, h('button', { type: 'button', class: 'cz-rk' + (out[r.i] ? ' out' : ''), onclick: (e) => menu(e, r.i) }, nm(r.i), big[r.i] ? ' 🔥' : '')),
+          h('td', null, r.p), h('td', null, r.w), c.draw ? h('td', null, r.d) : null, h('td', null, r.l), ...(showFA ? [h('td', null, r.f), h('td', null, r.a), h('td', null, (r.diff > 0 ? '+' : '') + r.diff)] : []), h('td', { class: 'pts' }, r.pts)))))),
+      h('p', { class: 'muted', style: 'font-size:12px;margin:10px 0 0;line-height:1.6' }, `승점이 같으면 ${c.scoring === 'wdl' ? '승자승 → 승수' : c.tie === 'h2h' ? '승자승 → 득실차 → 다득점' : '득실차 → 다득점 → 승자승'} 순이에요.`, h('br'), '이름을 누르면 오늘 불참이나 빅매치를 정할 수 있어요.'));
+    const sched = h('section', { class: 'card' }, h('div', { class: 'cz-ch' }, h('b', null, '경기 일정'),
+      h('div', { class: 'cz-btns' }, seg(C.pend ? 'p' : 'a', [['a', '모든 경기'], ['p', '예정 경기']], (v) => { C.pend = v === 'p'; saveView(); redraw(); }),
+        c.courts > 1 ? seg(C.cv ? 'c' : 'a', [['a', '한 줄 보기'], ['c', '경기장 보기']], (v) => { C.cv = v === 'c'; saveView(); redraw(); }) : null)),
+      !shown.length ? h('div', { class: 'muted', style: 'padding:16px;text-align:center' }, '남은 경기가 없어요.')
+        : C.cv && c.courts > 1 ? h('div', { class: 'cz-courts', style: `--cn:${c.courts}` }, Array.from({ length: c.courts }, (_, i) => h('div', { class: 'cz-court' }, h('b', { class: 'cz-court-h' }, `${i + 1}경기장`), shown.filter((x) => x.court === i + 1).map((x) => mrow(x, true)))))
+          : h('div', { class: 'cz-mlist' }, shown.map((x) => mrow(x, false))));
+    main = h('div', { class: 'cz-cols' }, rankCard, sched);
+  } else {
+    const bcard = h('section', { class: 'card' }, h('div', { class: 'cz-ch' }, h('b', null, '대진표')), h('div', { class: 'cz-scroll' }, bracketEl(c, br, nm, open)),
+      br.third ? h('div', { class: 'cz-third' }, h('span', { class: 'cz-bname' }, '3·4위전'), bmBox(c, br.third, nm, open)) : null);
+    main = bcard;
   }
-  const T = cupTable(c);
-  return h('div', { class: 'card' }, h('div', { class: 'cz-tbl-wrap' }, h('table', { class: 'cz-tbl' },
-    h('thead', null, h('tr', null, ['순위', '이름', '결과'].map((x) => h('th', null, x)))),
-    h('tbody', null, T.map((t) => h('tr', { class: t.rank && t.rank <= 3 ? 'top' + t.rank : '' }, h('td', null, t.rank || '-'), h('td', { class: 'nm' }, t.name), h('td', null, t.label)))))));
+  return h('div', { class: 'cz-view' }, head, ent, main);
 }
-function members(c) {
-  if (c.unit !== 'team') return null;
-  return h('div', { class: 'card' }, h('h3', null, '팀 명단'), h('div', { class: 'cz-teams' }, c.teams.map((t) => h('div', { class: 'cz-team' },
-    h('div', { class: 'cz-team-h' }, h('b', null, t.name), h('span', { class: 'muted' }, `${t.members.length}명`)),
-    h('div', { class: 'cz-team-m' }, t.members.map(stu).filter(Boolean).map((s) => h('span', { class: 'cz-chip ' + gcls(s.gender) }, s.name)))))));
+/* 토너먼트 경기 상자 */
+function bmBox(c, x, nm, open) {
+  const out = c.out, big = c.big, r = x.res;
+  const line = (id, w, s) => h('div', { class: 'cz-bl' + (w ? ' win' : '') + (id == null ? ' tbd' : '') + (id != null && out[id] ? ' out' : '') }, h('span', null, id != null ? nm(id) : x.bye ? '부전승' : '미정', id != null && big[id] ? ' 🔥' : ''), s != null && s !== '' ? h('b', null, s) : null);
+  const sv = (k) => (!r ? null : c.scoring === 'wdl' ? (r.w === k ? '승' : '') : k === 'a' ? r.sa : r.sb);
+  return h('button', { type: 'button', class: 'cz-bm' + (x.bye ? ' bye' : '') + (x.a != null && x.b != null && !x.bye ? ' play' : '') + (r ? ' done' : ''), 'data-key': x.key, onclick: () => open(x) },
+    x.no ? h('small', null, (x.rn ? (x.name === '결승' ? '결승' : `${x.name} ${x.rn}경기`) : `${x.no}경기`) + (c.courts > 1 && x.court ? ` · ${x.court}경기장` : '')) : null,
+    line(x.a, r ? r.w === 'a' : x.bye && x.a != null, sv('a')), line(x.b, r ? r.w === 'b' : x.bye && x.b != null, sv('b')));
 }
-function contestView(c, redraw) {
-  const tabs = h('div', { class: 'tabs', style: 'margin:12px 0' }, [['bracket', '대진표 보기'], ['table', '순위표 보기']].map(([k, n]) => h('button', { class: 'tab' + (C.view === k ? ' active' : ''), onclick: () => { C.view = k; redraw(); } }, n)));
-  return h('div', null, titleBar(c), tabs,
-    C.view === 'bracket' ? h('div', { class: 'card cz-board' }, c.kind === 'league' ? leagueBracket(c, redraw) : cupBracket(c, redraw)) : h('div', null, standings(c), members(c)));
+/* 대진표: 상자를 놓고 선은 SVG로 이어요 (이긴 쪽 선은 색) */
+function bracketEl(c, br, nm, open) {
+  const vert = C.bmode === 'v';
+  const wrap = h('div', { class: 'cz-br ' + (vert ? 'v' : 'h') });
+  const cols = br.rounds.map((ms, r) => h('div', { class: 'cz-bcol' }, h('span', { class: 'cz-bname' }, ms[0].name), h('div', { class: 'cz-bms' }, ms.map((x) => h('div', { class: 'cz-bcell' }, bmBox(c, x, nm, open), r === br.rounds.length - 1 && x.w != null ? h('span', { class: 'cz-champtag' }, `우승 · ${nm(x.w)}`) : null)))));
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); svg.setAttribute('class', 'cz-blines');
+  wrap.append(svg, ...cols);
+  const draw = () => {
+    if (!wrap.isConnected) return;
+    const W = wrap.scrollWidth, H = wrap.scrollHeight, o = wrap.getBoundingClientRect();
+    svg.setAttribute('width', W); svg.setAttribute('height', H); svg.replaceChildren();
+    const box = (k) => { const el = wrap.querySelector(`.cz-bm[data-key="${k}"]`); if (!el) return null; const b = el.getBoundingClientRect(); return { l: b.left - o.left + wrap.scrollLeft, t: b.top - o.top + wrap.scrollTop, w: b.width, h: b.height }; };
+    for (let r = 1; r < br.rounds.length; r++) br.rounds[r].forEach((m) => {
+      const to = box(m.key); if (!to) return;
+      [0, 1].forEach((s) => {
+        const src = br.rounds[r - 1][m.i * 2 + s], f = box(src.key); if (!f) return;
+        const win = src.w != null && !!src.res;
+        let d;
+        if (vert) { const x1 = f.l + f.w / 2, y1 = f.t + f.h, x2 = to.l + to.w / 2, y2 = to.t, my = (y1 + y2) / 2; d = `M${x1},${y1} V${my} H${x2} V${y2}`; }
+        else { const x1 = f.l + f.w, y1 = f.t + f.h / 2, x2 = to.l, y2 = to.t + to.h / 2, mx = (x1 + x2) / 2; d = `M${x1},${y1} H${mx} V${y2} H${x2}`; }
+        const p = document.createElementNS('http://www.w3.org/2000/svg', 'path'); p.setAttribute('d', d); p.setAttribute('class', win ? 'win' : '');
+        svg.append(p);
+      });
+    });
+  };
+  requestAnimationFrame(() => requestAnimationFrame(draw));
+  window.addEventListener('resize', function f() { if (!wrap.isConnected) return window.removeEventListener('resize', f); draw(); });
+  return wrap;
+}
+/* 팀 수정 */
+function teamEdit(c, onDone) {
+  const T = { teams: c.entrants.map((e) => ({ id: e.id, name: e.name, members: (e.members || []).slice() })), pool: [], gmode: 'equal', pick: null };
+  const body = h('div'), foot = h('div', { class: 'cz-foot-in' });
+  const dl = dialog('팀 수정', body, foot, 'wide');
+  const rd = () => {
+    body.replaceChildren(teamBoard(T, rd, true), h('p', { class: 'cz-note' }, '팀 수는 대진이 이미 만들어져 있어서 바꿀 수 없어요. 경기 기록은 그대로예요.' + (T.pool.length ? ` 미배정 ${T.pool.length}명은 대회에서 빠져요.` : '')));
+    foot.replaceChildren(h('div'), h('div', { class: 'row', style: 'gap:6px' }, h('button', { onclick: dl.close }, '취소'), h('button', { class: 'primary', onclick: () => {
+      c.entrants = c.entrants.map((e) => { const t = T.teams.find((y) => y.id === e.id); return t ? { ...e, name: (t.name || '').trim() || e.name, members: t.members } : e; });
+      dl.close(); onDone();
+    } }, '저장')));
+  };
+  rd();
+}
+/* 보관함 */
+function archiveBox(redraw) {
+  const body = h('div'), foot = h('div', { class: 'cz-foot-in' });
+  const dl = dialog('대회 보관함', body, foot, 'mid');
+  const rd = () => {
+    const kept = C.index.list.filter((x) => x.archived);
+    body.replaceChildren(h('p', { class: 'muted', style: 'margin:0 0 10px' }, '보관한 대회는 목록에 나오지 않아요. 삭제는 여기에서만 할 수 있어요.'),
+      kept.length ? h('div', { class: 'cz-arch' }, kept.map((x) => h('div', { class: 'cz-arow' },
+        h('div', { style: 'flex:1;min-width:0' }, h('b', null, x.name), h('span', { class: 'muted', style: 'font-size:13px' }, ` ${x.format === 'league' ? '리그' : '토너먼트'} · ${UNIT[x.unit] || ''} · ${x.total ? Math.round(x.done / x.total * 100) : 0}%`)),
+        h('button', { class: 'sm', onclick: async () => { const c = await getContest(x.id); x.archived = false; if (c) { delete c.archived; await saveNow(c); } else saveIndex(); C.cur = x.id; rd(); redraw(); } }, '꺼내기'),
+        h('button', { class: 'sm ghost', onclick: async () => {
+          if (!confirm(`'${x.name}' 대회를 삭제할까요? 경기 기록도 함께 삭제되고 되돌릴 수 없어요.`)) return;
+          C.index.list = C.index.list.filter((q) => q !== x); delete C.cache[x.id];
+          try { await APP.kvDel(keyOf(x.id)); await APP.kvSet('contest:index', C.index); } catch (e) { toast(errMsg(e), true); }
+          rd(); redraw();
+        } }, '삭제')))) : h('p', { class: 'muted' }, '보관한 대회가 없어요.'));
+    foot.replaceChildren(h('div'), h('button', { class: 'primary', onclick: dl.close }, '닫기'));
+  };
+  rd();
 }
 
 /* ---------- 페이지 ---------- */
 APP.pages.contest = () => {
-  const wrap = h('div');
+  const wrap = h('div', { class: 'cz-page' });
   const redraw = async () => {
     if (!C.index) { wrap.replaceChildren(APP.loading()); try { await loadIndex(); } catch (e) { wrap.replaceChildren(h('div', { class: 'card placeholder' }, errMsg(e))); return; } }
-    if (C.wiz) return wrap.replaceChildren(wizardView(redraw));
-    const L = C.index.list;
-    if (!L.length) return wrap.replaceChildren(h('div', { class: 'card cz-empty' }, h('div', { class: 'muted', style: 'margin-bottom:14px' }, '아직 대회가 없어요. 먼저 새 대회를 추가해 주세요.'),
-      h('button', { class: 'primary big', onclick: () => { C.wiz = newWizard(); redraw(); } }, '+ 새 대회 추가하기')));
-    const bar = h('div', { class: 'row cz-bar' },
-      h('select', { class: 'cz-sel', onchange: (e) => { C.cur = C.index.cur = e.target.value; saveIndex(); redraw(); } },
-        L.slice().reverse().map((x) => h('option', { value: x.id, selected: x.id === C.cur }, `${x.name} (${KIND[x.kind]}·${UNIT[x.unit]})${x.total && x.done === x.total ? ' ✓' : ''}`))),
-      h('div', { style: 'flex:1' }),
-      h('button', { class: 'primary', onclick: () => { C.wiz = newWizard(); redraw(); } }, '+ 새 대회 추가하기'),
-      h('button', { class: 'ghost', onclick: async () => {
-        const it = L.find((x) => x.id === C.cur); if (!it || !confirm(`"${it.name}" 대회를 지울까요? 기록도 모두 지워져요.`)) return;
-        C.index.list = L.filter((x) => x !== it); delete C.cache[it.id]; C.cur = C.index.cur = (C.index.list[C.index.list.length - 1] || {}).id || null;
-        try { await APP.kvDel(keyOf(it.id)); await APP.kvSet('contest:index', C.index); } catch (e) { toast(errMsg(e), true); }
-        redraw();
-      } }, '삭제'));
+    const live = C.index.list.filter((x) => !x.archived), kept = C.index.list.length - live.length;
+    if (!live.some((x) => x.id === C.cur)) C.cur = (live[live.length - 1] || {}).id || null;
+    if (C.index.cur !== C.cur) { C.index.cur = C.cur; saveIndex(); }
+    const create = () => wizard(async (c) => {
+      const p = progress(c); C.cache[c.id] = c;
+      C.index.list.push({ id: c.id, name: c.name, format: c.format, unit: c.unit, created: c.created, done: p.done, total: p.total });
+      C.cur = C.index.cur = c.id;
+      try { await APP.kvSet(keyOf(c.id), pack(c)); await APP.kvSet('contest:index', C.index); toast('대회를 만들었어요'); } catch (e) { toast(errMsg(e), true); }
+      redraw();
+    });
+    const top = h('div', { class: 'cz-top' },
+      h('div', { class: 'cz-chips-top' }, live.map((x) => { const pct = x.total ? Math.round(x.done / x.total * 100) : 0;
+        return h('button', { type: 'button', class: 'cz-cchip' + (x.id === C.cur ? ' on' : ''), onclick: () => { C.cur = x.id; redraw(); } },
+          h('span', { class: 'cz-ctop' }, h('span', { class: 'cz-badge' }, x.format === 'league' ? '리그' : '토너먼트'), h('b', null, x.name)),
+          h('span', { class: 'cz-cbar' }, bar(pct), h('em', null, pct + '%'))); })),
+      h('div', { class: 'cz-topbtns' }, h('button', { class: 'sm primary', onclick: create }, '+ 대회 만들기'), h('button', { class: 'sm', onclick: () => archiveBox(redraw) }, '🗄 보관함' + (kept ? ` ${kept}` : ''))));
+    if (!live.length) return wrap.replaceChildren(top, h('div', { class: 'card cz-empty' }, h('div', { class: 'muted', style: 'margin-bottom:14px' }, '진행 중인 대회가 없어요. 먼저 새 대회를 만들어 주세요.'), h('button', { class: 'primary big', onclick: create }, '+ 대회 만들기')));
     const body = h('div', null, APP.loading());
-    wrap.replaceChildren(bar, body);
+    wrap.replaceChildren(top, body);
     const c = await getContest(C.cur).catch((e) => { toast(errMsg(e), true); return null; });
-    if (!wrap.isConnected && !document.body.contains(wrap)) { /* 다른 메뉴로 이동함 */ }
-    body.replaceChildren(c ? contestView(c, redraw) : h('div', { class: 'card placeholder' }, '대회 기록을 불러오지 못했어요.'));
+    body.replaceChildren(c ? compView(c, redraw) : h('div', { class: 'card placeholder' }, '대회 기록을 불러오지 못했어요.'));
   };
   redraw();
   return wrap;
 };
-APP._contest = { leagueMatches, cupMatches, resolve, leagueTable, cupTable, unpack, pack };   // 시험용
+APP._contest = { leagueMatches, makeSlots, bracket, standings, pack, unpack, migrate, arranged };   // 시험용
 })();

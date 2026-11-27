@@ -47,3 +47,6 @@ button { font-family: inherit; cursor: pointer; }
 .lvbtns { display: grid; grid-template-columns: repeat(4, 1fr); gap: 5px; }
 .lv { min-width: 0; padding: 10px 2px; font-size: 13px; word-break: keep-all; }
 @media (min-width: 560px) { .lvrow { flex-direction: row; align-items: center; } .lvname { width: 90px; flex-shrink: 0; } }
+.yn { display: flex; gap: 10px; justify-content: center; margin-top: 18px; }
+.yn .btn { min-width: 120px; }
+.blk.miss, .lvrow.miss { outline: 2px solid #e5484d; outline-offset: 2px; border-radius: 10px; }

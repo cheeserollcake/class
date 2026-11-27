@@ -177,6 +177,15 @@ async function formCreate(title, desc, items) {
   try { await formPublish(f.formId, true); } catch (e) { /* 예전 방식 설문지는 만들면 바로 공개됨 */ }
   return { ok: true, id: f.formId, url: f.responderUri || `https://docs.google.com/forms/d/${f.formId}/viewform`, qmap };
 }
+/* 제출 현황 시트: 제출한 번호만 적어 두고 "링크가 있는 누구나 보기"로 공개 → 학생 화면이 이미 낸 이름을 막을 때 읽음 (이름·응답 내용은 없음) */
+async function statusCreate(title) {
+  const c = await gj(SHEETS, jsonOpt('POST', { properties: { title: title.slice(0, 100) } }));
+  const id = c.spreadsheetId;
+  await gf(`${SHEETS}/${id}/values/A1?valueInputOption=RAW`, jsonOpt('PUT', { values: [['-']] }));
+  try { const fo = await getFolder(); await gf(`${DRIVE}/${id}?addParents=${fo}&fields=id`, jsonOpt('PATCH', {})); } catch (e) { /* 폴더 이동 실패는 무시 */ }
+  await gf(`${DRIVE}/${id}/permissions`, jsonOpt('POST', { role: 'reader', type: 'anyone' }));
+  return { ok: true, id };
+}
 async function formResponses(id) {
   const out = []; let tok = '';
   for (let i = 0; i < 20; i++) {
@@ -387,6 +396,8 @@ async function handle(action, d) {
     case 'formCreate': return formsCall(() => formCreate(d.title, d.desc, d.items));
     case 'formResponses': return formsCall(() => formResponses(String(d.id)));
     case 'formClose': return formsCall(() => formPublish(String(d.id), !!d.open));
+    case 'statusCreate': return statusCreate(String(d.title || '제출 현황'));
+    case 'statusWrite': await gf(`${SHEETS}/${encodeURIComponent(String(d.id))}/values/A1?valueInputOption=RAW`, jsonOpt('PUT', { values: [[String(d.text || '-').slice(0, 2000)]] })); return { ok: true };
     case 'uploadFile': return upload(d.data, d.mime, d.name);
     case 'getFile': {
       const id = encodeURIComponent(String(d.fileId));

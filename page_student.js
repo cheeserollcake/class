@@ -559,9 +559,21 @@ function formItems(round, opts) {
 async function formCreate(round, opts) {
   const title = `${round.name} — 교우관계 설문`;
   const r = await api('formCreate', { title, desc: '솔직하게 답해 주세요. 답한 내용은 선생님만 볼 수 있어요.', items: formItems(round, opts) });
-  round.form = { id: r.id, url: r.url, qmap: r.qmap, opts, created: Date.now(), applied: {}, count: 0, closed: false, pages: 1, names: APP.roster().map((x) => [x.num, x.name, APP.gcls(x.gender)]) };
+  round.form = { id: r.id, url: r.url, qmap: r.qmap, opts, created: Date.now(), applied: {}, count: 0, closed: false, pages: 1, min: opts.min || 1, names: APP.roster().map((x) => [x.num, x.name, APP.gcls(x.gender)]) };
+  await ensureStatus(round);
   ST.survey.nom[round.id] = ST.survey.nom[round.id] || {};
   saveSurveyLater(round.id); await flushSurvey();
+}
+/* 제출 현황 시트(제출한 번호만, 공개 보기) 없으면 만들기 */
+async function ensureStatus(round) {
+  const F = round.form; if (!F || F.status || APP.DEMO) return;
+  try { const st = await api('statusCreate', { title: `${round.name} 친구 설문 제출 현황` }); F.status = st.id; F.statusText = ''; saveSurveyLater(round.id); } catch (e) { /* 없어도 설문은 됨 (이미 낸 이름 막기만 안 됨) */ }
+}
+async function writeStatus(round, nums) {
+  const F = round.form; if (!F || !F.status) return;
+  const text = nums.slice().sort((a, b) => a - b).join(',') || '-';
+  if (text === F.statusText) return;
+  try { await api('statusWrite', { id: F.status, text }); F.statusText = text; } catch (e) { /* 다음에 */ }
 }
 /* 응답 가져오기: 학생마다 가장 최근 응답만, 이미 반영한 응답은 다시 덮어쓰지 않음 */
 async function formSync(round, quiet) {
@@ -572,6 +584,7 @@ async function formSync(round, quiet) {
   const latest = new Map(), roster = APP.roster(), ok = new Set(roster.map((x) => x.num));
   resp.forEach((r) => { const v = valsOf(r, F.qmap.name)[0]; const n = v && optNum(v.value); if (n != null && ok.has(n)) latest.set(n, r); });
   F.count = latest.size; F.lastSync = Date.now();
+  await writeStatus(round, [...latest.keys()]);
   let applied = 0, over = 0;
   const lvByName = Object.fromEntries(LEVELS.map(([v, n]) => [n, v]));
   latest.forEach((r, me) => {
@@ -634,7 +647,7 @@ function studentLink(round) {
   if (F.qmap.lv) { g = {}; Object.entries(F.qmap.lv).forEach(([qid, lab]) => { const n = optNum(lab); if (n != null) g[n] = dec(qid); }); }
   const names = F.names || APP.roster().map((x) => [x.num, x.name, APP.gcls(x.gender)]);
   const pages = F.pages || (1 + (F.opts.nom ? 4 : 0) + (F.opts.lv ? 1 : 0));
-  const cfg = { t: `${round.name} 친구 설문`, f: pub, p: pages, e, g, s: names };
+  const cfg = { t: `${round.name} 친구 설문`, f: pub, p: pages, e, g, s: names, k: F.status || '', m: F.min || 1 };
   const bytes = new TextEncoder().encode(JSON.stringify(cfg));
   let bin = ''; bytes.forEach((b) => { bin += String.fromCharCode(b); });
   return new URL('student.html', location.href).href.split('?')[0] + '#c=' + btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
@@ -656,17 +669,23 @@ function formsOffHelp(body, project) {
 function formPanel(round, redraw) {
   const roster = APP.roster(), F = round.form;
   const body = h('div');
-  const close = () => { ov.remove(); redraw(); };
+  let poll = null;
+  const close = () => { clearInterval(poll); ov.remove(); redraw(); };
+  if (!APP.DEMO) poll = setInterval(async () => { const F3 = round.form; if (!F3 || F3.closed || !ov.isConnected) return; try { const n = await formSync(round, true); if (n) draw(); } catch (e) { /* 다음에 */ } }, 20000);
+  const minSel = (cur, on) => h('label', { class: 'row', style: 'gap:6px;margin-bottom:10px' }, '상황마다 고르는 인원',
+    h('select', { onchange: (e) => on(Number(e.target.value)) }, [[1, '1~3명 (최소 1명)'], [2, '2~3명 (최소 2명)'], [3, '꼭 3명']].map(([v, n]) => h('option', { value: v, selected: cur === v }, n))));
   const ov = h('div', { class: 'overlay' }, h('div', { class: 'modal qr-modal' }, h('div', { class: 'row', style: 'justify-content:space-between;margin-bottom:8px' }, h('h3', { style: 'margin:0' }, `📱 QR로 학생 응답 받기 · ${round.name}`), h('button', { onclick: close }, '닫기')), body));
   const draw = () => {
     const F2 = round.form;
     if (APP.DEMO) return body.replaceChildren(h('div', { class: 'banner warn' }, '데모 모드에서는 설문지를 만들 수 없어요. 구글로 로그인해서 써 주세요.'));
     if (!F2) {
-      const opt = { nom: true, lv: false };
+      const opt = { nom: true, lv: false, min: 1 };
       body.replaceChildren(
         h('div', { class: 'muted', style: 'line-height:1.7;margin-bottom:10px' }, '선생님 구글 드라이브에 구글 설문지를 만들고 QR을 보여 줘요. 학생이 휴대폰·태블릿으로 응답하면 이 사이트에 자동으로 들어와요. (이 화면이나 관계도를 열어 두면 1분마다 가져와요)'),
         h('label', { class: 'row', style: 'gap:6px;margin-bottom:6px' }, h('input', { type: 'checkbox', checked: true, onchange: (e) => { opt.nom = e.target.checked; } }), '상황별 함께하고 싶은 / 함께하고 싶지 않은 친구 (최대 3명씩)'),
         h('label', { class: 'row', style: 'gap:6px;margin-bottom:12px' }, h('input', { type: 'checkbox', onchange: (e) => { opt.lv = e.target.checked; } }), `친구에 대한 생각 4단계 (친구 ${roster.length - 1}명을 모두 평가해서 길어요)`),
+        minSel(1, (v) => { opt.min = v; }),
+        h('div', { class: 'muted', style: 'font-size:13px;margin-bottom:10px' }, '모든 문항이 필수예요. 빠진 곳이 있으면 학생 화면에서 제출이 안 돼요. 이미 제출한 이름은 다시 고를 수 없어요.'),
         h('div', { class: 'row', style: 'justify-content:flex-end' }, h('button', { class: 'primary', onclick: async (e) => {
           if (!opt.nom && !opt.lv) return toast('하나 이상 골라 주세요', true);
           e.target.disabled = true; e.target.textContent = '만드는 중…';
@@ -681,7 +700,8 @@ function formPanel(round, redraw) {
       h('div', { class: 'qr-wrap' }, qrCanvas(link, 260),
         h('div', { class: 'qr-side' },
           F2.closed ? h('div', { class: 'banner warn', style: 'margin:0 0 8px' }, '응답을 마감했어요.') : null,
-          h('div', { class: 'muted', style: 'font-size:13px;margin-bottom:6px' }, '학생은 이름 칸을 눌러 고르는 화면으로 응답해요.'),
+          h('div', { class: 'muted', style: 'font-size:13px;margin-bottom:6px' }, '학생은 이름 칸을 눌러 고르는 화면으로 응답해요. 모든 문항 필수 · 이미 낸 이름은 막혀요.'),
+          F2.opts.nom ? minSel(F2.min || 1, (v) => { F2.min = v; saveSurveyLater(round.id); draw(); toast('바뀐 QR을 다시 보여 주세요'); }) : null,
           h('div', { class: 'row', style: 'gap:6px;flex-wrap:wrap;margin:8px 0' },
             h('button', { class: 'sm primary', onclick: () => showBigQR(link, `${round.name} 친구 설문`) }, '크게 보기'),
             h('button', { class: 'sm', onclick: () => { navigator.clipboard && navigator.clipboard.writeText(link).then(() => toast('학생용 링크를 복사했어요')); } }, '링크 복사'),
@@ -699,6 +719,7 @@ function formPanel(round, redraw) {
       h('div', { class: 'muted', style: 'margin-top:10px;line-height:1.6' }, '같은 학생이 여러 번 응답하면 마지막 응답만 반영돼요. 학생이 응답한 뒤 선생님이 직접 고친 내용은, 그 학생이 다시 응답하지 않는 한 그대로 남아요.'));
   };
   draw(); document.body.append(ov);
+  if (F && !F.status) ensureStatus(round).then(draw);
 }
 
 /* ---------- 상황별 지명 분석 ---------- */
