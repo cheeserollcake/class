@@ -147,7 +147,12 @@ const setSetting = (key, value) => upsert('settings', 0, [key, String(value)]);
 /* ---------------- 구글 설문지 (교우관계 조사를 학생이 직접 응답) ----------------
    drive.file 권한으로 이 앱이 만든 설문지만 다룸. 구글 클라우드에서 "Google Forms API"를 켜야 함 */
 const FORMS = 'https://forms.googleapis.com/v1/forms';
-async function formsCall(fn) { try { return await fn(); } catch (e) { if (e.message === 'APIOFF') throw new Error('FORMSOFF'); throw e; } }
+async function formsCall(fn) {
+  try { return await fn(); } catch (e) {
+    if (e.message === 'APIOFF') { const er = new Error('FORMSOFF'); er.project = (clientId().match(/^(\d+)-/) || [])[1] || ''; throw er; }
+    throw e;
+  }
+}
 async function formPublish(id, open) {
   return gj(`${FORMS}/${encodeURIComponent(id)}:setPublishSettings`, jsonOpt('POST', { publishSettings: { publishState: { isPublished: true, isAcceptingResponses: open } }, updateMask: 'publishState' }));
 }

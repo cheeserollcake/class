@@ -643,6 +643,16 @@ function showBigQR(url, title) {
   const ov = h('div', { class: 'qr-full', onclick: () => ov.remove() }, h('div', { class: 'qr-full-t' }, title), qrCanvas(url, Math.min(innerWidth, innerHeight) * 0.7 | 0), h('div', { class: 'qr-full-u' }, url), h('div', { class: 'muted' }, '화면을 누르면 닫혀요'));
   document.body.append(ov);
 }
+/* Google Forms API가 꺼져 있을 때: 이 사이트의 클라이언트 ID가 속한 프로젝트로 바로 가는 링크 */
+function formsOffHelp(body, project) {
+  const url = 'https://console.cloud.google.com/apis/library/forms.googleapis.com' + (project ? '?project=' + project : '');
+  const old = body.querySelector('.forms-off'); if (old) old.remove();
+  body.append(h('div', { class: 'banner warn forms-off', style: 'margin-top:12px;line-height:1.7' },
+    h('b', null, 'Google Forms API가 아직 켜져 있지 않아요.'), h('br'),
+    '① 아래 링크를 눌러 열리는 화면 위쪽 프로젝트가 ', h('b', null, project ? `프로젝트 번호 ${project}` : '로그인에 쓰는 프로젝트'), '인지 확인하고 ', h('b', null, '사용'), ' 버튼을 누르세요.', h('br'),
+    h('a', { href: url, target: '_blank', rel: 'noopener' }, 'Google Forms API 사용 설정 화면 열기'), h('br'),
+    '② 이미 "사용"으로 되어 있다면 켠 지 얼마 안 돼서 그래요. 3~5분 뒤 다시 눌러 주세요.'));
+}
 function formPanel(round, redraw) {
   const roster = APP.roster(), F = round.form;
   const body = h('div');
@@ -661,7 +671,7 @@ function formPanel(round, redraw) {
           if (!opt.nom && !opt.lv) return toast('하나 이상 골라 주세요', true);
           e.target.disabled = true; e.target.textContent = '만드는 중…';
           try { await formCreate(round, opt); toast('설문지를 만들었어요'); draw(); }
-          catch (er) { e.target.disabled = false; e.target.textContent = '설문지 만들기'; toast(er.message === 'FORMSOFF' ? '구글 클라우드에서 "Google Forms API"를 사용 설정해 주세요. (설정방법.md 참고)' : errMsg(er), true); }
+          catch (er) { e.target.disabled = false; e.target.textContent = '설문지 만들기'; if (er.message === 'FORMSOFF') formsOffHelp(body, er.project); else toast(errMsg(er), true); }
         } }, '설문지 만들기')));
       return;
     }
