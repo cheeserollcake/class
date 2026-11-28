@@ -440,20 +440,20 @@ function viewSurvey(redraw) {
   const head = h('div', { class: 'row', style: 'gap:8px;flex-wrap:wrap' },
     h('b', null, '조사'), roundSel,
     h('input', { type: 'date', value: round.date || '', title: '조사한 날짜', onchange: (e) => { round.date = e.target.value; saveSurveyLater(); } }),
-    h('button', { class: 'sm', onclick: async () => { const n = await uiPrompt('조사 이름', round.name); if (n) { round.name = n.trim().slice(0, 30); saveSurveyLater(); redraw(); } } }, '이름 바꾸기'),
+    h('button', { class: 'sm has-ic ic-only', 'data-noic': '1', title: '조사 이름 바꾸기', onclick: async () => { const n = await uiPrompt('조사 이름', round.name); if (n) { round.name = n.trim().slice(0, 30); saveSurveyLater(); redraw(); } } }, APP.icon('pencil'), '이름 바꾸기'),
     h('button', { class: 'sm', onclick: addRound }, '+ 새 조사'),
     h('button', { class: 'sm primary', onclick: () => formPanel(round, redraw) }, round.form ? `📱 QR 응답 (${round.form.count || 0}명)` : '📱 QR로 학생 응답 받기'),
-    h('button', { class: 'sm ghost', onclick: async () => {
+    h('button', { class: 'sm has-ic ic-only', 'data-noic': '1', title: '조사 삭제', onclick: async () => {
       if (!await uiConfirm(`"${round.name}" 조사를 삭제할까요? 입력한 평가가 모두 지워져요.`)) return;
       sv.main.rounds = rounds.filter((r) => r.id !== round.id); delete sv.data[round.id];
       delete sv.nom[round.id];
       try { await APP.kvSet('survey:main', sv.main); await APP.kvDel('survey:r:' + round.id); await APP.kvDel('survey:n:' + round.id); } catch (e) { toast(errMsg(e), true); }
       ST.svRound = null; redraw();
-    } }, '조사 삭제'));
+    } }, APP.icon('trash'), '조사 삭제'));
 
   const idx = roster.findIndex((x) => x.num === ST.rater), me = roster[idx];
   const go = (d) => { const n = roster[(idx + d + roster.length) % roster.length]; ST.rater = n.num; redraw(); };
-  const modeTabs = h('div', { class: 'tabs', style: 'margin:12px 0 0' }, [['lv', '① 친구에 대한 생각 (4단계)'], ['nom', '② 상황별 함께하고 싶은 친구 (지명)']].map(([k, n]) =>
+  const modeTabs = h('div', { class: 'tabs', style: 'margin:12px 0 0;justify-content:flex-start' }, [['lv', '① 친구에 대한 생각 (4단계)'], ['nom', '② 상황별 함께하고 싶은 친구 (지명)']].map(([k, n]) =>
     h('button', { class: 'tab' + ((ST.svMode || 'lv') === k ? ' active' : ''), onclick: () => { ST.svMode = k; redraw(); } }, n)));
   if (ST.svMode === 'nom') { box.append(h('h3', null, '교우관계 조사 입력'), head, modeTabs, nomInput(round, roster, me, idx, go, redraw)); return box; }
   const raterSel = h('select', { onchange: (e) => { ST.rater = Number(e.target.value); redraw(); } },
@@ -488,7 +488,7 @@ function viewSurvey(redraw) {
   box.append(h('h3', null, '교우관계 조사 입력'), head, modeTabs,
     h('div', { class: 'muted', style: 'margin:10px 0;line-height:1.7' }, '평가한 학생을 고른 뒤, 친구마다 4단계 중 하나를 누르세요. 키보드 숫자(1 싫음 · 2 그저 그럼 · 3 친해지고 싶음 · 4 좋음)로 입력하면 다음 친구로 넘어가요. (↑↓ 이동, 같은 칸을 다시 누르면 지워져요) 자동 저장돼요.'),
     nav,
-    h('div', { class: 'row', style: 'justify-content:space-between;margin:10px 0 6px' }, h('b', null, `${me.num}번 ${me.name} 학생의 평가`), cnt,
+    h('div', { class: 'row sv-head', style: 'justify-content:center;gap:14px;margin:10px 0 6px' }, h('b', null, `${me.num}번 ${me.name} 학생의 평가`), cnt,
       h('button', { class: 'sm danger', onclick: async () => {
         if (!done(me.num)) return toast(`${me.name} 학생은 아직 입력한 기록이 없어요`);
         if (!await uiConfirm(`${me.name} 학생이 친구들을 평가한 기록 ${done(me.num)}개를 모두 지울까요?`)) return;

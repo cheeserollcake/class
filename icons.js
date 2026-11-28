@@ -14,6 +14,7 @@ const SVG = {
   widen: `<svg viewBox="0 0 24 24" ${LINE}><path d="M3 12h7M5.5 9.5L3 12l2.5 2.5M21 12h-7M18.5 9.5L21 12l-2.5 2.5"/><path d="M12 5v14" stroke-dasharray="2 2.5"/></svg>`,
   grid4: `<svg viewBox="0 0 24 24" ${LINE}><rect x="4" y="4" width="6.5" height="6.5" rx="1.2"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.2"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.2"/><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.2"/></svg>`,
   newwin: `<svg viewBox="0 0 24 24" ${LINE}><path d="M14 4h6v6M20 4l-8.5 8.5"/><path d="M18 14v4.5A1.5 1.5 0 0 1 16.5 20h-11A1.5 1.5 0 0 1 4 18.5v-11A1.5 1.5 0 0 1 5.5 6H10"/></svg>`,
+  pencil: `<svg viewBox="0 0 24 24" ${LINE}><path d="M4 20h4L19 9a2.1 2.1 0 0 0-3-3L5 17z"/><path d="M14.5 7.5l2 2"/></svg>`,
   trash: `<svg viewBox="0 0 24 24" ${LINE}><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12.5A1.5 1.5 0 0 0 8.5 21h7a1.5 1.5 0 0 0 1.5-1.5L18 7M9 7V4.5A1.5 1.5 0 0 1 10.5 3h3A1.5 1.5 0 0 1 15 4.5V7"/></svg>`,
   lock: `<svg viewBox="0 0 24 24" ${LINE}><rect x="5" y="10.5" width="14" height="10" rx="2"/><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"/><path d="M12 14.5v2.5"/></svg>`,
   unlock: `<svg viewBox="0 0 24 24" ${LINE}><rect x="5" y="10.5" width="14" height="10" rx="2"/><path d="M8 10.5V7.5a4 4 0 0 1 7.6-1.7"/><path d="M12 14.5v2.5"/></svg>`,

@@ -687,13 +687,13 @@ function pwEditor() {
   return h('div', { class: 'card', style: 'max-width:420px' },
     h('h3', null, '비밀번호 변경'),
     h('div', { class: 'muted', style: 'font-size:13px;margin-bottom:8px' }, '학생이 짐작하기 어려운 6자 이상으로 정해 주세요. 같은 숫자 반복이나 123456은 안 돼요.'),
-    h('div', { class: 'field' }, a), h('div', { class: 'field' }, b),
+    h('div', { class: 'pw-row' }, a, b,
     h('button', { class: 'primary', onclick: async () => {
       if (a.value.length < 6) return toast(ERR.SHORT, true);
       if (a.value !== b.value) return toast('비밀번호 확인이 일치하지 않습니다', true);
       try { await api('changePw', { newPw: a.value }); S.pw = a.value; S.defaultPw = false; toast('비밀번호를 바꿨습니다'); renderPage(); }
       catch (e) { toast(errMsg(e), true); }
-    } }, '변경'));
+    } }, '변경')));
 }
 
 /* ---- 자리 배치 설정 ---- */
