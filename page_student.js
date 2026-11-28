@@ -453,7 +453,7 @@ function viewSurvey(redraw) {
 
   const idx = roster.findIndex((x) => x.num === ST.rater), me = roster[idx];
   const go = (d) => { const n = roster[(idx + d + roster.length) % roster.length]; ST.rater = n.num; redraw(); };
-  const modeTabs = h('div', { class: 'tabs', style: 'margin:12px 0 0;justify-content:flex-start' }, [['lv', '① 친구에 대한 생각 (4단계)'], ['nom', '② 상황별 함께하고 싶은 친구 (지명)']].map(([k, n]) =>
+  const modeTabs = h('div', { class: 'tabs', style: 'margin:12px 0 0;justify-content:center' }, [['lv', '① 친구에 대한 생각 (4단계)'], ['nom', '② 상황별 함께하고 싶은 친구 (지명)']].map(([k, n]) =>
     h('button', { class: 'tab' + ((ST.svMode || 'lv') === k ? ' active' : ''), onclick: () => { ST.svMode = k; redraw(); } }, n)));
   if (ST.svMode === 'nom') { box.append(h('h3', null, '교우관계 조사 입력'), head, modeTabs, nomInput(round, roster, me, idx, go, redraw)); return box; }
   const raterSel = h('select', { onchange: (e) => { ST.rater = Number(e.target.value); redraw(); } },
