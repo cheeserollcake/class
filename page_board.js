@@ -9,6 +9,7 @@ const { h, toast, errMsg } = APP;
 /* 보드가 여러 개: 'board:index' = { boards:[{id,name}], cur }, 보드 내용 = 'board:main'(첫 보드) 또는 'board:b:<id>' */
 const keyOf = (id) => (id === 'main' ? 'board:main' : 'board:b:' + id);
 const B = { data: null, loading: null, imgs: {}, panel: null, canvas: null, focus: null, H: 0, index: null, cache: {} };
+APP._boardState = () => B;   // 시험용
 const def = () => ({ items: [], layouts: {}, cfg: { showSubmit: false, submitIds: [], showEvents: false }, events: [], locked: false });
 const uid = () => 'i' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
 const PERIODS = [1, 2, 3, 4, 5, 6];
@@ -33,6 +34,7 @@ async function load() {
 let saveT = null;
 function save() {
   clearTimeout(saveT);
+  try { captureShapes(); } catch (e) { /* 모양 기억 실패해도 저장은 */ }
   const id = B.index.cur, data = B.data;
   saveT = setTimeout(async () => {
     try { await APP.api('kvSet', { key: keyOf(id), value: JSON.stringify(data) }); }
@@ -157,10 +159,63 @@ function syncWidgets() {
 
 /* ---------- 배치 ---------- */
 const bucketOf = (W) => String(Math.round(W / 60) * 60);
+/* 묶음 모양: 묶인 상자들의 서로 간 위치를 기억해서, 어느 화면 크기에서도 같은 모양으로 놓기 */
+function groupsNow() {
+  const g = {}; B.data.items.forEach((it) => { if (it.g) (g[it.g] = g[it.g] || []).push(it.id); });
+  Object.keys(g).forEach((k) => { if (g[k].length < 2) delete g[k]; });
+  return g;
+}
+function relOf(ids, P) {
+  if (!P || !ids.every((id) => P[id])) return null;
+  const x0 = Math.min(...ids.map((id) => P[id].x)), y0 = Math.min(...ids.map((id) => P[id].y)), rel = {};
+  ids.forEach((id) => { const p = P[id]; rel[id] = { dx: p.x - x0, dy: p.y - y0, w: p.w, ...(p.h ? { h: p.h } : {}) }; });
+  return rel;
+}
+function shapeOf(gid, ids) {
+  const S = B.data.gshape && B.data.gshape[gid];
+  if (S && ids.every((id) => S[id])) return S;
+  // 예전에 묶은 것: 가장 넓은 화면의 배치를 기준으로
+  const L = B.data.layouts, keys = Object.keys(L).filter((k) => ids.every((id) => L[k] && L[k][id])).sort((a, b) => Number(b) - Number(a));
+  return keys.length ? relOf(ids, L[keys[0]]) : null;
+}
+function captureShapes() {
+  if (!B.data || !B.canvas) return;
+  const G = groupsNow(), bk = bucketOf(B.canvas.clientWidth), L = B.data.layouts[bk];
+  const src = L && Object.keys(L).some((x) => x !== '_z') ? L : B.cur;
+  const out = {};
+  Object.entries(G).forEach(([gid, ids]) => { const r = relOf(ids, src) || shapeOf(gid, ids); if (r) out[gid] = r; });
+  B.data.gshape = out;
+}
+function applyShapes(pos, store) {
+  const out = { ...pos };
+  Object.entries(groupsNow()).forEach(([gid, ids]) => {
+    const sh = shapeOf(gid, ids); if (!sh) return;
+    const have = ids.filter((id) => out[id]); if (!have.length) return;
+    const ax = Math.min(...have.map((id) => out[id].x)), ay = Math.min(...have.map((id) => out[id].y));
+    ids.forEach((id) => { const r = sh[id]; const np = { x: ax + r.dx, y: ay + r.dy, w: r.w, ...(r.h ? { h: r.h } : {}) }; out[id] = np; if (store) store[id] = { ...np }; });
+  });
+  return out;
+}
 function autoLayout(W) {
   const gap = 10, cols = Math.max(1, Math.floor((W + gap) / (230 + gap))), cw = (W - gap * (cols - 1)) / cols, colY = Array(cols).fill(0), pos = {};
+  const G = groupsNow(), done = new Set();
   B.data.items.forEach((it) => {
     const el = B.inner.querySelector(`[data-id="${it.id}"]`); if (!el) return;
+    if (it.g && G[it.g]) {   // 묶음은 모양 그대로 한 덩어리로
+      if (done.has(it.g)) return; done.add(it.g);
+      const ids = G[it.g], sh = shapeOf(it.g, ids);
+      if (sh) {
+        let bw = 0, bh = 0;
+        ids.forEach((id) => { const e = B.inner.querySelector(`[data-id="${id}"]`), r = sh[id]; if (!e) return; e.style.width = r.w + 'px'; e.style.height = r.h ? r.h + 'px' : ''; bw = Math.max(bw, r.dx + r.w); bh = Math.max(bh, r.dy + (r.h || e.offsetHeight)); });
+        const k = Math.min(cols, Math.max(1, Math.ceil((bw + gap) / (cw + gap))));
+        let best = 0, by = Infinity;
+        for (let c = 0; c + k <= cols; c++) { const y = Math.max(...colY.slice(c, c + k)); if (y < by) { by = y; best = c; } }
+        const x0 = best * (cw + gap);
+        ids.forEach((id) => { const r = sh[id]; pos[id] = { x: x0 + r.dx, y: by + r.dy, w: r.w, ...(r.h ? { h: r.h } : {}) }; });
+        for (let c = best; c < best + k; c++) colY[c] = by + bh + gap;
+        return;
+      }
+    }
     const w = it.type === 'image' ? Math.min(cw, it.w || cw) : cw;
     el.style.width = w + 'px'; el.style.height = '';
     if (it.type === 'widget') fitSub(el, false);
@@ -194,6 +249,7 @@ function place() {
     const hOf = (ps) => Math.max(0, ...Object.keys(ps).map((id) => { const e = B.inner.querySelector(`[data-id="${id}"]`); return ps[id].y + (e ? e.offsetHeight : 0); }));
     for (let i = 0; i < 12 && H > 120 && hOf(pos) * z > H && z > 0.4; i++) { z = Math.max(0.4, z * 0.9); pos = autoLayout(W / z); }
   }
+  pos = applyShapes(pos, has(bk) ? L[bk] : null);   // 묶음은 어느 화면에서도 같은 모양
   // 새로 생긴 상자는 지금 보이는 화면의 왼쪽 위에
   const els = {}; B.inner.querySelectorAll('.bi').forEach((e) => { els[e.dataset.id] = e; });
   const cur = {}; let nNew = 0;
@@ -266,11 +322,11 @@ function widgetBody(it, ctx) {
     return c;
   });
   upCount();
-  const lockBtn = h('button', { class: 'bw-lock' + (wl ? ' on' : ''), title: wl ? '잠금 풀기' : '잠그기 (누르지 못하게)', onclick: (e) => {
+  const lockBtn = h('button', { class: 'bw-lock' + (wl ? ' on' : ''), 'data-noic': '1', title: wl ? '잠금 풀기' : '잠그기 (누르지 못하게)', onclick: (e) => {
     e.stopPropagation();
     if (wl) { B.wOpen.add(b.id); if (b.locked) { b.locked = false; APP.queueBoardSave(b); } } else B.wOpen.delete(b.id);
     refresh();
-  } }, wl ? '잠김' : '잠금');
+  } }, APP.lockIc(wl));
   return h('div', { class: 'bw-sub' + (wl ? ' locked' : '') }, h('div', { class: 'bw-title' }, h('span', null, b.title || '제목 없는 제출판'), count, h('span', { style: 'flex:1' }), lockBtn),
     h('div', { class: 'bw-cells' }, cells));
 }
@@ -724,7 +780,7 @@ function drawHead() {
     ...(d.locked ? [] : [h('button', { class: 'sm', onclick: settings }, '설정'), h('button', { class: 'sm', title: '열에 맞춰 다시 정렬', onclick: () => { pushUndo(); d.layouts = {}; save(); render(); } }, '자동정렬'),
       h('button', { class: 'sm', title: '빈 보드를 새로 만들어요 (지금 보드는 그대로 남아요)', onclick: addBoard }, '+ 보드 추가')]),
     h('button', { class: 'sm', title: '전체화면', onclick: () => { const w = B.panel.closest('.bd-page') || B.panel; document.fullscreenElement ? document.exitFullscreen() : (w.requestFullscreen && w.requestFullscreen()); } }, document.fullscreenElement ? '전체화면 끝' : '전체화면'),
-    h('button', { class: 'sm' + (d.locked ? ' primary' : ''), title: '잠그면 학생이 보드를 고칠 수 없어요', onclick: () => { d.locked = !d.locked; save(); render(); } }, d.locked ? '🔒 잠김' : '잠금'));
+    h('button', { class: 'sm has-ic ic-only' + (d.locked ? ' primary' : ''), 'data-noic': '1', title: d.locked ? '보드 잠김 (눌러서 풀기)' : '보드 열림 — 잠그면 학생이 보드를 고칠 수 없어요', onclick: () => { d.locked = !d.locked; save(); render(); } }, APP.lockIc(d.locked)));
 }
 function mount(ctx) {
   CTX = ctx; B.wOpen = new Set(); B.sels = new Set(); B.multi = false; B.gbox = null;

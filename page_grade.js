@@ -97,7 +97,7 @@ APP.pages.grade = () => {
   const TW = [['fit', '맞춤'], ['s', '좁게'], ['m', '보통'], ['full', '꽉 차게']];
   let tw = 'full'; try { tw = localStorage.getItem('grade_tw') || 'full'; } catch (e) { /* 기본 */ }
   wrap.dataset.tw = tw;
-  const twCtl = () => h('div', { class: 'tw-seg', title: '성적 관리 표의 너비' }, h('span', null, '표 너비'), TW.map(([v, n]) => h('button', { class: 'sm' + (wrap.dataset.tw === v ? ' on' : ''), onclick: () => { wrap.dataset.tw = v; try { localStorage.setItem('grade_tw', v); } catch (e) { /* 저장 안 됨 */ } drawTabs(); } }, n)));
+  const twCtl = () => { const i = Math.max(0, TW.findIndex(([v]) => v === wrap.dataset.tw)); return APP.widthCtl(i, TW.length, (k) => { wrap.dataset.tw = TW[k][0]; try { localStorage.setItem('grade_tw', TW[k][0]); } catch (e) { /* 저장 안 됨 */ } drawTabs(); }); };
   const drawTabs = () => tabs.replaceChildren(...[['perf', '수행평가 관리'], ['etc', '기타 평가 관리'], ['trend', '성적 추이'], ['view', '성적 조회'], ['cmt', '평어 관리'], ['gen', '평어 생성']].map(([id, n]) =>
     h('button', { class: 'tab' + (GR.tab === id ? ' active' : ''), onclick: () => { GR.tab = id; drawTabs(); draw(); } }, n)), h('div', { style: 'flex:1' }), twCtl(), h('button', { class: 'sm', onclick: exportGrades }, '내보내기'));
   const draw = async () => {
@@ -247,7 +247,7 @@ async function viewEtc(redraw) {
   const curEv = evs.find((e) => e.id === GR.evalId);
   const chips = h('div', { class: 'chips' }, evs.filter((e) => !(e.group === 'base' && e.id !== BASE_ID)).map((e) => {
     const on = !GR.creating && (e.id === GR.evalId || (e.group === 'base' && curEv && curEv.group === 'base'));
-    return h('button', { class: 'chip' + (on ? ' active' : ''), onclick: () => { GR.evalId = e.group === 'base' && curEv && curEv.group === 'base' ? curEv.id : e.id; GR.creating = false; GR.editing = false; redraw(); } }, e.group === 'base' ? '기초학력평가' : e.name || '(이름 없음)', e.fixed ? h('span', { class: 'chip-lock', title: '기본 평가 (삭제 불가)' }, ' 🔒') : null);
+    return h('button', { class: 'chip' + (on ? ' active' : ''), onclick: () => { GR.evalId = e.group === 'base' && curEv && curEv.group === 'base' ? curEv.id : e.id; GR.creating = false; GR.editing = false; redraw(); } }, e.group === 'base' ? '기초학력평가' : e.name || '(이름 없음)', e.fixed ? h('span', { class: 'chip-lock', title: '기본 평가 (삭제 불가)' }, ' ', APP.lockIc(true)) : null);
   }),
     h('button', { class: 'chip add', onclick: () => { GR.creating = true; GR.editing = false; redraw(); } }, '+ 평가 추가'));
   if (GR.creating) return h('div', null, chips, evalForm(null, redraw));
@@ -347,7 +347,7 @@ async function evalEntry(ev, redraw) {
   });
   upStats();
   const colHead = (c) => h('th', { class: 'col-th' + (c.locked ? ' locked' : '') },
-    h('button', { class: 'col-name', title: c.locked ? '눌러서 잠금 풀기' : '눌러서 잠그기', onclick: async () => { c.locked = !c.locked; try { await saveCfg(); } catch (x) { toast(errMsg(x), true); } redraw(); } }, (c.locked ? '🔒 ' : '') + c.name),
+    h('button', { class: 'col-name', title: c.locked ? '눌러서 잠금 풀기' : '눌러서 잠그기', onclick: async () => { c.locked = !c.locked; try { await saveCfg(); } catch (x) { toast(errMsg(x), true); } redraw(); } }, c.locked ? APP.lockIc(true) : null, c.locked ? ' ' : null, c.name),
     h('button', { class: 'col-edit', title: '열 이름 바꾸기', onclick: async () => { const n = prompt('열 이름', c.name); if (!n || !n.trim()) return; c.name = n.trim().slice(0, 20); try { await saveCfg(); } catch (x) { toast(errMsg(x), true); } redraw(); } }, '✎'),
     cols.length > 1 ? h('button', { class: 'col-edit', title: '열 삭제', onclick: async () => {
       if (!confirm(`"${c.name}" 열을 삭제할까요? 이 열에 입력한 점수도 지워져요.`)) return;

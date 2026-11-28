@@ -10,6 +10,10 @@ const SVG = {
   download: `<svg viewBox="0 0 24 24" ${LINE} stroke-width="2.4"><path d="M12 4v10"/><path d="M7.5 10l4.5 4.5 4.5-4.5"/><path d="M5 15.5v2A2.5 2.5 0 0 0 7.5 20h9a2.5 2.5 0 0 0 2.5-2.5v-2"/></svg>`,
   upload: `<svg viewBox="0 0 24 24" ${LINE} stroke-width="2.4"><path d="M12 14.5V4"/><path d="M7.5 8.5L12 4l4.5 4.5"/><path d="M5 15.5v2A2.5 2.5 0 0 0 7.5 20h9a2.5 2.5 0 0 0 2.5-2.5v-2"/></svg>`,
   template: `<svg viewBox="0 0 24 24" ${LINE} stroke-width="1.8"><path d="M11 21H6.5A1.5 1.5 0 0 1 5 19.5v-15A1.5 1.5 0 0 1 6.5 3H13l5 5v3"/><path d="M13 3v5h5"/><circle cx="17" cy="17" r="4.2"/><path d="M17 19.2v-4.4M15.2 16.6l1.8-1.8 1.8 1.8"/></svg>`,
+  narrow: `<svg viewBox="0 0 24 24" ${LINE}><path d="M3 12h6M6.5 9.5L9 12l-2.5 2.5M21 12h-6M17.5 9.5L15 12l2.5 2.5M12 5v14"/></svg>`,
+  widen: `<svg viewBox="0 0 24 24" ${LINE}><path d="M3 12h7M5.5 9.5L3 12l2.5 2.5M21 12h-7M18.5 9.5L21 12l-2.5 2.5"/><path d="M12 5v14" stroke-dasharray="2 2.5"/></svg>`,
+  lock: `<svg viewBox="0 0 24 24" ${LINE}><rect x="5" y="10.5" width="14" height="10" rx="2"/><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"/><path d="M12 14.5v2.5"/></svg>`,
+  unlock: `<svg viewBox="0 0 24 24" ${LINE}><rect x="5" y="10.5" width="14" height="10" rx="2"/><path d="M8 10.5V7.5a4 4 0 0 1 7.6-1.7"/><path d="M12 14.5v2.5"/></svg>`,
   cloud: `<svg viewBox="0 0 24 24" ${LINE} stroke-width="2"><path d="M7.5 18.5H7a4.5 4.5 0 0 1-.6-8.96A6 6 0 0 1 17.8 8.6 4.5 4.5 0 0 1 17 18.5h-.5"/><path d="M12 20.5V12M9 14.5l3-3 3 3"/></svg>`
 };
 const FMT = { hwp: ['HWP', '#1f6fd1'], docx: ['DOC', '#2b579a'], xlsx: ['XLS', '#1d6f42'], gsheet: ['SHT', '#0f9d58'], pdf: ['PDF', '#e0362c'], png: ['PNG', '#8e44ad'], csv: ['CSV', '#5f6b7a'] };
@@ -26,6 +30,16 @@ function icon(k) {
 }
 window.APP = window.APP || {};
 window.APP.icon = icon;
+/* 너비 단계 버튼: ◀▶ 대신 좁히기·넓히기 화살표 아이콘 (idx: 지금 단계, n: 단계 수) */
+window.APP.widthCtl = (idx, n, onChange) => {
+  const box = document.createElement('span'); box.className = 'wctl';
+  const mk = (k, tip, d) => { const b = document.createElement('button'); b.type = 'button'; b.className = 'sm has-ic ic-only'; b.dataset.noic = '1'; b.title = tip; b.setAttribute('aria-label', tip); b.append(icon(k));
+    b.disabled = d > 0 ? idx >= n - 1 : idx <= 0; b.onclick = () => onChange(Math.max(0, Math.min(n - 1, idx + d))); return b; };
+  box.append(mk('narrow', '너비 좁게', -1), mk('widen', '너비 넓게', 1));
+  return box;
+};
+/* 자물쇠: 잠겨 있으면 닫힌 자물쇠, 아니면 열린 자물쇠 */
+window.APP.lockIc = (closed) => { const s = icon(closed ? 'lock' : 'unlock'); s.classList.add('ic-lockmark'); return s; };
 
 const EMOJI = /^[\s⚙🗄📄📥📤💾⬇⬆📁🗂️️]+/u;
 function pick(t) {

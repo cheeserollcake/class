@@ -31,6 +31,7 @@ function groupsOf(geo, asg) {
 }
 const TEAM_COLORS = ['#fde68a', '#a7f3d0', '#fbcfe8', '#bfdbfe', '#fed7aa', '#ddd6fe', '#fecaca', '#99f6e4', '#d9f99d', '#e9d5ff'];
 const pairKey = (a, b) => (a < b ? a + '-' + b : b + '-' + a);
+const dark = (hex) => { const n = parseInt(hex.slice(1), 16), f = (v) => Math.round(v * 0.62); return `rgb(${f(n >> 16)},${f((n >> 8) & 255)},${f(n & 255)})`; };
 function teamMap(geo) { if (geo._tm) return geo._tm; const m = new Map(); (geo.teams || []).forEach((t, ti) => t.cells.forEach((i) => m.set(i, ti))); Object.defineProperty(geo, '_tm', { value: m, enumerable: false, writable: true }); return m; }
 function teamGroups(geo, asg) {
   const g = (geo.teams || []).map(() => []), tm = teamMap(geo);
@@ -158,7 +159,11 @@ function view(redraw) {
   const tmap = teamMap(geo);
   const asg = SE.cur ? SE.cur.assign : null;
   const banner = h('div', { class: 'drum', hidden: true });
-  const grid = h('div', { class: 'pgrid', style: `grid-template-columns:repeat(${geo.cols},1fr)` });
+  let showT = true; try { showT = localStorage.getItem('seat_team') !== 'off'; } catch (e) { /* 기본: 보이기 */ }
+  const hasT = (geo.teams || []).some((t) => t.cells.length);
+  const grid = h('div', { class: 'pgrid' + (hasT && showT ? ' teams' : ''), style: `grid-template-columns:repeat(${geo.cols},1fr)` });
+  const tline = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); tline.setAttribute('class', 'tline');
+  const gwrap = h('div', { class: 'pgrid-wrap' }, grid, tline);
   const cells = [];
   const by = rosterBy();
   const paint = (c, n, extra) => {
@@ -179,6 +184,36 @@ function view(redraw) {
     });
     cells.push(c); grid.append(c.el);
   });
+
+  /* 모둠 테두리: 같은 모둠 자리를 한 덩어리 선으로 묶기 */
+  const drawTeams = () => {
+    if (!gwrap.isConnected) return;
+    tline.replaceChildren();
+    if (!hasT || !showT) return;
+    const G = parseFloat(getComputedStyle(grid).columnGap) || 12, e = G / 2, d = 2.5, NS = 'http://www.w3.org/2000/svg';
+    tline.setAttribute('width', gwrap.clientWidth); tline.setAttribute('height', gwrap.clientHeight);
+    const rect = (i) => { const el = cells[i] && cells[i].el; return el ? { l: el.offsetLeft - e, t: el.offsetTop - e, r: el.offsetLeft + el.offsetWidth + e, b: el.offsetTop + el.offsetHeight + e } : null; };
+    const C = geo.cols, R = Math.ceil(geo.cells.length / C);
+    const tOf = (r, c) => (r < 0 || c < 0 || r >= R || c >= C) ? -1 : (tmap.has(r * C + c) ? tmap.get(r * C + c) : -1);
+    geo.teams.forEach((tm, ti) => {
+      const col = dark(TEAM_COLORS[ti % TEAM_COLORS.length]); let path = '';
+      tm.cells.forEach((i) => {
+        const r = Math.floor(i / C), c = i % C, q = rect(i); if (!q) return;
+        const same = (dr, dc) => tOf(r + dr, c + dc) === ti;
+        const bnd = { T: !same(-1, 0), B: !same(1, 0), L: !same(0, -1), Rt: !same(0, 1) };
+        // 각 변: 바깥쪽이면 안쪽으로 d만큼 들여서 선을 그림. 끝은 볼록 모서리면 줄이고, 오목 모서리면 늘림
+        const endAdj = (perpB, nr, nc, side) => perpB ? d : (same(nr, nc) && tOf(r + nr + (side === 'T' ? -1 : side === 'B' ? 1 : 0), c + nc + (side === 'L' ? -1 : side === 'Rt' ? 1 : 0)) !== ti ? 0 : -d);
+        if (bnd.T) { const y = q.t + d; path += `M${q.l + endAdj(bnd.L, 0, -1, 'T')} ${y}H${q.r - endAdj(bnd.Rt, 0, 1, 'T')}`; }
+        if (bnd.B) { const y = q.b - d; path += `M${q.l + endAdj(bnd.L, 0, -1, 'B')} ${y}H${q.r - endAdj(bnd.Rt, 0, 1, 'B')}`; }
+        if (bnd.L) { const x = q.l + d; path += `M${x} ${q.t + endAdj(bnd.T, -1, 0, 'L')}V${q.b - endAdj(bnd.B, 1, 0, 'L')}`; }
+        if (bnd.Rt) { const x = q.r - d; path += `M${x} ${q.t + endAdj(bnd.T, -1, 0, 'Rt')}V${q.b - endAdj(bnd.B, 1, 0, 'Rt')}`; }
+      });
+      const p = document.createElementNS(NS, 'path'); p.setAttribute('d', path); p.setAttribute('stroke', col); p.setAttribute('stroke-width', '3'); p.setAttribute('fill', 'none'); p.setAttribute('stroke-linecap', 'square');
+      tline.append(p);
+    });
+  };
+  setTimeout(drawTeams, 0);
+  if (window.ResizeObserver) new ResizeObserver(() => drawTeams()).observe(grid);
 
   /* 두근두근 연출 */
   const animate = (res, onDone) => {
@@ -258,16 +293,17 @@ function view(redraw) {
       APP.exporter.open({ title: '자리 배치', items, empty: '저장된 자리가 아직 없어요. 자리를 섞은 뒤 "저장"을 눌러 주세요' });
     } catch (e) { toast(errMsg(e), true); }
   } }, '내보내기');
+  const teamTog = hasT ? h('label', { class: 'muted', style: 'display:inline-flex;gap:6px;align-items:center' }, h('input', { type: 'checkbox', checked: showT, onchange: (e) => { try { localStorage.setItem('seat_team', e.target.checked ? 'on' : 'off'); } catch (x) { /* 저장 안 됨 */ } redraw(); } }), '모둠 표시') : null;
   const sound = h('label', { class: 'muted', style: 'display:inline-flex;gap:6px;align-items:center' }, h('input', { type: 'checkbox', checked: SE.sound, onchange: (e) => { SE.sound = e.target.checked; } }), '두근 소리');
 
   return h('div', null,
     h('div', { class: 'card' },
-      h('div', { class: 'row gap' }, shuffleBtn, skipBtn, saveBtn, loadSel, delBtn, exportBtn, sound)),
+      h('div', { class: 'row gap' }, shuffleBtn, skipBtn, saveBtn, loadSel, delBtn, exportBtn, teamTog, sound)),
     h('div', { class: 'card' },
       banner,
       h('div', { class: 'board-front' }, '칠 판'),
       h('div', { class: 'col-labels', style: `grid-template-columns:repeat(${geo.cols},1fr)` }, Array.from({ length: geo.cols }, (_, c) => h('div', { class: 'col-label ro' }, (cfg.colNames && cfg.colNames[c]) || String(c + 1)))),
-      grid,
-      h('div', { class: 'muted', style: 'margin-top:10px' }, asg ? (SE.loadedName ? `불러온 자리: ${SE.loadedName} · ` : '') + '두 자리를 차례로 누르면 서로 바꿀 수 있어요. 마음에 들면 "저장"을 누르세요.' : '"자리 섞기"를 누르면 설정한 규칙대로 자리가 정해져요.')));
+      gwrap,
+      asg && SE.loadedName ? h('div', { class: 'muted', style: 'margin-top:10px' }, `불러온 자리: ${SE.loadedName}`) : null));
 }
 })();

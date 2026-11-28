@@ -251,9 +251,9 @@ function viewPick(redraw) {
   if (P.last && P.last.length) {
     const grid = h('div', { class: 'slot-grid' });
     P.last.forEach((num) => { const st = stu(num); grid.append(h('div', { class: 'slot landed ' + gcls(st ? st.gender : '') }, h('span', null, st ? st.name : num + '번'))); });
-    stage.append(stageHead(h('div', { class: 'draw-title' }, '지난 결과'), info, [btn, rst]), grid);
+    stage.append(stageHead(h('div', { class: 'draw-title' }, `남은 사람 ${pool.length}명`), info, [btn, rst]), grid);
     layoutSlots(stage, grid, P.last.length, P.last.map((x) => nm(x)));
-  } else stage.append(stageHead(h('div', { class: 'draw-title' }, ''), info, [rst]), h('div', { class: 'draw-ready' }, pool.length ? h('button', { class: 'primary big', onclick: go }, '뽑기 시작') : h('div', { class: 'muted' }, '뽑을 학생이 없어요. 초기화하거나 설정에서 조건을 바꿔 보세요.')));
+  } else stage.append(stageHead(h('div', { class: 'draw-title' }, ''), info, [rst]), h('div', { class: 'draw-ready' }, pool.length ? h('div', { class: 'ready-in' }, h('div', { class: 'ready-msg' }, `${n}명씩 뽑습니다.`), h('button', { class: 'primary big', onclick: go }, '뽑기 시작')) : h('div', { class: 'muted' }, '뽑을 학생이 없어요. 초기화하거나 설정에서 조건을 바꿔 보세요.')));
   return stage;
 }
 /* 결과창 머리: 왼쪽 정보 · 가운데 제목 · 오른쪽 버튼 */
@@ -388,8 +388,8 @@ function viewTeam(redraw) {
   const mname = { none: '성별 고려 안 함', equal: '성비 동등하게', sep: '남녀 따로' }[Tm.mode];
   const info = [];
   const stage = h('div', { class: 'draw-stage team' });
-  if (Tm.last) { stage.append(stageHead(h('div', { class: 'draw-title' }, '지난 결과'), info, [h('button', { class: 'primary', disabled: N < 2, onclick: go }, '다시 구성')])); const g = teamGrid(Tm.last.teams, true); stage.append(g.grid); layoutTeams(stage, g.grid, Tm.last.teams, null); }
-  else stage.append(stageHead(h('div', { class: 'draw-title' }, ''), info, []), h('div', { class: 'draw-ready' }, N >= 2 ? h('button', { class: 'primary big', onclick: go }, '팀 구성 시작') : h('div', { class: 'muted' }, '학생이 2명 이상 있어야 해요.')));
+  if (Tm.last) { stage.append(stageHead(h('div', { class: 'draw-title' }, ''), info, [h('button', { class: 'primary', disabled: N < 2, onclick: go }, '다시 구성')])); const g = teamGrid(Tm.last.teams, true); stage.append(g.grid); layoutTeams(stage, g.grid, Tm.last.teams, null); }
+  else stage.append(stageHead(h('div', { class: 'draw-title' }, ''), info, []), h('div', { class: 'draw-ready' }, N >= 2 ? h('div', { class: 'ready-in' }, h('div', { class: 'ready-msg' }, `${Tm.n}팀으로 나눕니다.`), h('button', { class: 'primary big', onclick: go }, '팀 구성 시작')) : h('div', { class: 'muted' }, '학생이 2명 이상 있어야 해요.')));
   return stage;
 }
 function teamGrid(teams, landed) {

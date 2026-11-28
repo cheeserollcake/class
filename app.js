@@ -284,9 +284,9 @@ function renderShell() {
   const nav = h('nav', { class: 'side' + (closed ? ' closed' : '') },
     h('div', { class: 'brand' }, h('span', null, '학급관리'), tog),
     TABS.map((t) => h('button', { class: 'nav-btn' + (S.tab === t.id ? ' active' : ''), onclick: () => go(t.id) },
-      h('span', null, t.name), t.pw && !S.unlocked ? h('span', { class: 'lock' }, '잠김') : null)),
+      h('span', null, t.name), t.pw ? h('span', { class: 'lock', title: S.unlocked ? '열려 있음' : '잠김' }, APP.lockIc(!S.unlocked)) : null)),
     h('div', { class: 'spacer' }),
-    S.unlocked ? h('button', { class: 'ghost sm', onclick: () => { lock(); toast('잠갔습니다'); } }, '지금 잠그기') : null,
+    S.unlocked ? h('button', { class: 'ghost sm', onclick: () => { lock(); toast('잠갔습니다'); } }, APP.lockIc(true), ' 지금 잠그기') : null,
     DEMO ? h('div', { class: 'who' }, '데모 모드') : null,
     DEMO ? null : h('button', { class: 'ghost sm', onclick: logout }, '로그아웃'), togM);
   root.append(h('div', { class: 'shell' }, nav, h('main', { class: 'main', id: 'main' })), fab);
@@ -854,7 +854,7 @@ function pageSubmit() {
     const lockAll = S.boards.some((b) => !b.locked);
     S.boards.forEach((b) => { b.locked = lockAll; queueBoardSave(b); });
     entries.forEach(syncLock);
-  } }, '전체 잠금/해제');
+  } }, APP.lockIc(true), ' 전체 잠금/해제');
   const fsBtn = h('button', { onclick: () => { document.fullscreenElement ? document.exitFullscreen() : (wrap.requestFullscreen && wrap.requestFullscreen()); } }, '전체화면');
   const cfgBtn = h('button', { onclick: () => subSettings() }, '설정');
   const bar = h('div', { class: 'sub-bar' }, addBtn, allLock, fsBtn, cfgBtn, saveState, h('span', { class: 'muted' }, '한 번 누르면 제출(회색), 두 번 빠르게 누르면 확인(연두색)'));
@@ -865,7 +865,7 @@ function pageSubmit() {
 
   function syncLock(e) {
     const b = e.board;
-    e.title.disabled = b.locked; e.lockBtn.textContent = b.locked ? '잠김' : '잠금'; e.lockBtn.className = 'sm ' + (b.locked ? 'primary' : '');
+    e.title.disabled = b.locked; e.lockBtn.replaceChildren(APP.lockIc(b.locked)); e.lockBtn.title = b.locked ? '잠김 (눌러서 풀기)' : '열림 (눌러서 잠그기)'; e.lockBtn.className = 'sm has-ic ic-only' + (b.locked ? ' primary' : '');
     e.del.disabled = b.locked; e.el.classList.toggle('locked', b.locked);
   }
   function addBoard(b) {
@@ -879,7 +879,7 @@ function pageSubmit() {
     };
     const commit = () => { b.done = [...doneSet].sort((x, y) => x - y); b.green = [...greenSet].sort((x, y) => x - y); up(); queueBoardSave(b); if (APP.classBoard) APP.classBoard.refresh(); };
     const title = h('input', { class: 'title', value: b.title, placeholder: '과제명', oninput: (ev) => { b.title = ev.target.value; queueBoardSave(b); if (APP.classBoard) APP.classBoard.refresh(); } });
-    const lockBtn = h('button', { onclick: () => { b.locked = !b.locked; queueBoardSave(b); syncLock(e); } });
+    const lockBtn = h('button', { 'data-noic': '1', onclick: () => { b.locked = !b.locked; queueBoardSave(b); syncLock(e); } });
     const del = h('button', { class: 'sm ghost', title: '삭제', onclick: async () => {
       if (!confirm(`"${b.title || '제목 없음'}" 제출판을 삭제할까요?`)) return;
       try { await api('deleteBoard', { id: b.id }); S.boards = S.boards.filter((x) => x.id !== b.id); entries.splice(entries.indexOf(e), 1); e.el.remove(); syncEmpty(); layout(); if (APP.classBoard) APP.classBoard.refresh(); }

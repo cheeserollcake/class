@@ -762,14 +762,12 @@ async function recOpen(id, redraw) {
         h('div', { class: 'rec-title' }, h('span', { class: 'cz-badge' }, '📝 기록 모드'), h('b', null, c.name), h('span', { class: 'muted' }, `${p.done} / ${p.total}경기`)),
         h('div', { class: 'rec-tools' },
           c.courts > 1 ? seg(cview ? 'c' : 'l', [['c', '경기장 보기'], ['l', '한 줄 보기']], (v) => { cview = v === 'c'; try { localStorage.setItem('rec_cv', cview ? 'court' : 'list'); } catch (e) { /* 저장 안 됨 */ } draw(); }) : null,
-          h('span', { class: 'muted', style: 'font-size:12px' }, '화면 너비'),
-          h('button', { class: 'sm', disabled: wi === 0, onclick: () => { wi--; try { localStorage.setItem('rec_w', wi); } catch (e) { /* 저장 안 됨 */ } draw(); } }, '◀ 좁게'),
-          h('button', { class: 'sm', disabled: wi === RW.length - 1, onclick: () => { wi++; try { localStorage.setItem('rec_w', wi); } catch (e) { /* 저장 안 됨 */ } draw(); } }, '넓게 ▶'),
+          APP.widthCtl(wi, RW.length, (v) => { wi = v; try { localStorage.setItem('rec_w', wi); } catch (e) { /* 저장 안 됨 */ } draw(); }),
           h('button', { class: 'sm danger', onclick: async () => {
             if (!(await pwAsk('기록 모드 나가기', '나가려면 선생님 비밀번호를 넣어 주세요.'))) return;
             try { localStorage.removeItem(REC_KEY); } catch (e) { /* 없음 */ }
             layer.remove(); document.body.classList.remove('rec-on'); if (redraw) redraw(); else if (APP.renderPage) APP.renderPage();
-          } }, '나가기 🔒'))),
+          } }, APP.lockIc(true), ' 나가기'))),
       h('div', { class: 'rec-prog' }, bar(p.pct, icOf(c)), h('b', null, p.pct + '%')),
       c.courts > 1 && cview
         ? [h('div', { class: 'rec-courts', style: `--cn:${c.courts}` }, Array.from({ length: c.courts }, (_, ci) => {
