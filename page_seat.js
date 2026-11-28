@@ -161,7 +161,19 @@ function view(redraw) {
   const banner = h('div', { class: 'drum', hidden: true });
   let showT = true; try { showT = localStorage.getItem('seat_team') !== 'off'; } catch (e) { /* 기본: 보이기 */ }
   const hasT = (geo.teams || []).some((t) => t.cells.length);
-  const grid = h('div', { class: 'pgrid' + (hasT && showT ? ' teams' : ''), style: `grid-template-columns:repeat(${geo.cols},1fr)` });
+  // 모둠 표시: 모둠이 바뀌는 줄·열 사이에 간격을 더 둠 (빈 칸 트랙을 끼워 넣음)
+  const TG = hasT && showT, nR = Math.ceil(geo.cells.length / geo.cols);
+  const tAt = (r, c) => (geo.cells[r * geo.cols + c] && tmap.has(r * geo.cols + c) ? tmap.get(r * geo.cols + c) : -1);
+  const colBr = [], rowBr = [];
+  if (TG) {
+    for (let c = 0; c < geo.cols - 1; c++) colBr[c] = [...Array(nR).keys()].some((r) => tAt(r, c) !== tAt(r, c + 1) && (tAt(r, c) >= 0 || tAt(r, c + 1) >= 0));
+    for (let r = 0; r < nR - 1; r++) rowBr[r] = [...Array(geo.cols).keys()].some((c) => tAt(r, c) !== tAt(r + 1, c) && (tAt(r, c) >= 0 || tAt(r + 1, c) >= 0));
+  }
+  const colTrack = [], rowTrack = []; let colTpl = '', rowTpl = '';
+  for (let c = 0, k = 1; c < geo.cols; c++) { colTrack[c] = k++; colTpl += '1fr '; if (colBr[c]) { colTpl += '10px '; k++; } }
+  for (let r = 0, k = 1; r < nR; r++) { rowTrack[r] = k++; rowTpl += 'auto '; if (rowBr[r]) { rowTpl += '10px '; k++; } }
+  const gridStyle = TG ? `grid-template-columns:${colTpl};grid-template-rows:${rowTpl}` : `grid-template-columns:repeat(${geo.cols},1fr)`;
+  const grid = h('div', { class: 'pgrid' + (TG ? ' teams' : ''), style: gridStyle });
   const tline = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); tline.setAttribute('class', 'tline');
   const gwrap = h('div', { class: 'pgrid-wrap' }, grid, tline);
   const cells = [];
@@ -174,7 +186,7 @@ function view(redraw) {
     if (!geo.cells[c.idx]) c.el.textContent = '';
   };
   geo.cells.forEach((on, i) => {
-    const c = { idx: i, el: h('div', { class: 'pseat' }) };
+    const c = { idx: i, el: h('div', { class: 'pseat', style: TG ? `grid-column:${colTrack[i % geo.cols]};grid-row:${rowTrack[Math.floor(i / geo.cols)]}` : null }) };
     paint(c, asg ? asg[i] : null);
     c.el.addEventListener('click', () => {
       if (SE.busy || !asg || !geo.cells[i]) return;
@@ -192,7 +204,13 @@ function view(redraw) {
     if (!hasT || !showT) return;
     const G = parseFloat(getComputedStyle(grid).columnGap) || 12, e = G / 2, d = 2.5, NS = 'http://www.w3.org/2000/svg';
     tline.setAttribute('width', gwrap.clientWidth); tline.setAttribute('height', gwrap.clientHeight);
-    const rect = (i) => { const el = cells[i] && cells[i].el; return el ? { l: el.offsetLeft - e, t: el.offsetTop - e, r: el.offsetLeft + el.offsetWidth + e, b: el.offsetTop + el.offsetHeight + e } : null; };
+    const box = (i) => { const el = cells[i] && cells[i].el; return el ? { l: el.offsetLeft, t: el.offsetTop, r: el.offsetLeft + el.offsetWidth, b: el.offsetTop + el.offsetHeight } : null; };
+    // 칸의 테두리 구역: 이웃 칸과의 한가운데까지 (이웃이 없으면 e만큼)
+    const rect = (i) => {
+      const q = box(i); if (!q) return null; const r0 = Math.floor(i / geo.cols), c0 = i % geo.cols;
+      const L = c0 > 0 ? box(i - 1) : null, Rr = c0 < geo.cols - 1 ? box(i + 1) : null, T = r0 > 0 ? box(i - geo.cols) : null, Bb = box(i + geo.cols);
+      return { l: L ? (L.r + q.l) / 2 : q.l - e, r: Rr ? (q.r + Rr.l) / 2 : q.r + e, t: T ? (T.b + q.t) / 2 : q.t - e, b: Bb ? (q.b + Bb.t) / 2 : q.b + e };
+    };
     const C = geo.cols, R = Math.ceil(geo.cells.length / C);
     const tOf = (r, c) => (r < 0 || c < 0 || r >= R || c >= C) ? -1 : (tmap.has(r * C + c) ? tmap.get(r * C + c) : -1);
     geo.teams.forEach((tm, ti) => {
@@ -302,7 +320,7 @@ function view(redraw) {
     h('div', { class: 'card' },
       banner,
       h('div', { class: 'board-front' }, '칠 판'),
-      h('div', { class: 'col-labels', style: `grid-template-columns:repeat(${geo.cols},1fr)` }, Array.from({ length: geo.cols }, (_, c) => h('div', { class: 'col-label ro' }, (cfg.colNames && cfg.colNames[c]) || String(c + 1)))),
+      h('div', { class: 'col-labels' + (TG ? ' teams' : ''), style: TG ? `grid-template-columns:${colTpl}` : `grid-template-columns:repeat(${geo.cols},1fr)` }, Array.from({ length: geo.cols }, (_, c) => h('div', { class: 'col-label ro', style: TG ? `grid-column:${colTrack[c]}` : null }, (cfg.colNames && cfg.colNames[c]) || String(c + 1)))),
       gwrap,
       asg && SE.loadedName ? h('div', { class: 'muted', style: 'margin-top:10px' }, `불러온 자리: ${SE.loadedName}`) : null));
 }

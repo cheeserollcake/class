@@ -30,13 +30,16 @@ function icon(k) {
 }
 window.APP = window.APP || {};
 window.APP.icon = icon;
-/* 너비 단계 버튼: ◀▶ 대신 좁히기·넓히기 화살표 아이콘 (idx: 지금 단계, n: 단계 수) */
+/* 너비 조정 버튼: "↔ 기본" 한 개. 누를 때마다 좁게 → 보통 → 넓게 → 기본 순서로 바뀜 */
+window.APP.WIDTHS = ['좁게', '보통', '넓게', '기본'];
 window.APP.widthCtl = (idx, n, onChange) => {
-  const box = document.createElement('span'); box.className = 'wctl';
-  const mk = (k, tip, d) => { const b = document.createElement('button'); b.type = 'button'; b.className = 'sm has-ic ic-only'; b.dataset.noic = '1'; b.title = tip; b.setAttribute('aria-label', tip); b.append(icon(k));
-    b.disabled = d > 0 ? idx >= n - 1 : idx <= 0; b.onclick = () => onChange(Math.max(0, Math.min(n - 1, idx + d))); return b; };
-  box.append(mk('narrow', '너비 좁게', -1), mk('widen', '너비 넓게', 1));
-  return box;
+  const L = window.APP.WIDTHS, b = document.createElement('button');
+  b.type = 'button'; b.className = 'wbtn'; b.dataset.noic = '1';
+  b.title = '너비 조정 (누를 때마다 바뀌어요)';
+  b.innerHTML = '<span class="wbtn-ar">↔</span>';
+  b.append(document.createTextNode(' ' + (L[idx] || L[L.length - 1])));
+  b.onclick = () => onChange((idx + 1) % n);
+  return b;
 };
 /* 자물쇠: 잠겨 있으면 닫힌 자물쇠, 아니면 열린 자물쇠 */
 window.APP.lockIc = (closed) => { const s = icon(closed ? 'lock' : 'unlock'); s.classList.add('ic-lockmark'); return s; };

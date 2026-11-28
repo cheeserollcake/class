@@ -331,7 +331,7 @@ function view(redraw) {
   const edit = RO.mode === 'edit';
   const stage = h('div', { class: 'rstage' });
   RO.pages.forEach((p, pi) => {
-    const wrap = h('div', { class: 'rpage', 'data-page': pi });
+    const wrap = h('div', { class: 'rpage', 'data-page': pi, style: `--ar:${(p.canvas.width / p.canvas.height) || 0.707}` });
     p.canvas.className = 'rcanvas'; wrap.append(p.canvas);
     RO.form.fields.filter((f) => f.page === pi).forEach((f) => {
       const box = h('div', { class: 'rbox' + (edit ? ' edit' : '') + (RO.sel === f.id ? ' sel' : ''), style: `left:${f.x * 100}%;top:${f.y * 100}%;width:${f.w * 100}%;height:${f.h * 100}%;${edit ? `border-color:${KCOLOR[f.kind]};background:${KCOLOR[f.kind]}22` : ''}`, 'data-id': f.id, 'data-kind': f.kind });
@@ -399,23 +399,27 @@ function view(redraw) {
       return found ? `칸마다 좌우에 있는 글자의 글씨체를 보고 골랐어요: ${Object.entries(cnt).map(([n, c]) => `${n} ${c}칸`).join(', ')}` : '양식에서 글씨체 정보를 찾지 못해 기본 글꼴을 썼어요. (사진 양식은 글씨체를 알 수 없어요) 목록에서 직접 골라 주세요.';
     })()) :
     h('div', { class: 'muted', style: 'margin-top:6px' }, RO.fontInfo && RO.fontInfo.name ? `이 양식에 쓰인 글꼴: ${RO.fontInfo.name}${RO.fontInfo.family ? ' (비슷한 글꼴을 자동으로 골랐어요)' : ' (같은 글꼴이 없어서 가장 비슷해 보이는 글꼴을 직접 골라 주세요)'}` : '양식과 가장 비슷해 보이는 글꼴을 골라 주세요. (고른 글꼴은 양식에 저장돼요)'));
-  const fillPanel = h('div', { class: 'card' }, h('h3', null, '역할 입력'),
-    h('div', { class: 'muted', style: 'margin-bottom:12px;line-height:1.65' }, '왼쪽 양식의 칸을 눌러 바로 입력하세요. 담당자 칸을 누르면 학생을 여러 명 골라 넣을 수 있어요. 글자는 가운데 정렬되고, 크기는 칸에 맞게 자동으로 조절돼요.'),
-    fontRow,
-    h('div', { class: 'row' }, rows ? h('span', { class: 'muted' }, `입력 칸 ${rows}줄`) : h('span', { class: 'banner warn', style: 'margin:0' }, '역할 칸이 없어요. "입력 칸 수정"에서 칸의 종류를 정해 주세요.'),
-      h('div', { style: 'flex:1' }),
+  const fontSel = h('select', { value: RO.form.font || 'auto', title: '양식 글씨체', onchange: (e) => { RO.form.font = e.target.value; changeFont(); redraw(); } }, h('option', { value: 'auto' }, '글씨체: 자동 (칸 좌우 글씨체 따라가기)'), FONT_LIST.map(([v, n]) => h('option', { value: v }, '글씨체: ' + n)));
+  const fontNote = fontRow.querySelector('.muted');
+  const fillPanel = h('div', { class: 'card role-fillbar' },
+    h('div', { class: 'row gap', style: 'flex-wrap:wrap' },
+      h('b', null, '역할 입력'), fontSel,
+      isAuto() ? null : h('label', { class: 'row', style: 'gap:4px;cursor:pointer' }, h('input', { type: 'checkbox', checked: !!RO.form.bold, onchange: (e) => { RO.form.bold = e.target.checked; changeFont(); } }), '굵게'),
+      rows ? h('span', { class: 'muted' }, `입력 칸 ${rows}줄`) : h('span', { class: 'banner warn', style: 'margin:0' }, '역할 칸이 없어요. "입력 칸 수정"에서 칸의 종류를 정해 주세요.'),
       h('button', { class: 'sm ghost', onclick: () => { if (!confirm('입력한 내용을 모두 지울까요?')) return; RO.roles = [{ name: '', desc: '', owner: '' }]; RO.setName = ''; redraw(); } }, '내용 모두 지우기'),
-      h('button', { class: 'sm ghost', onclick: () => { RO.mode = 'edit'; redraw(); } }, '입력 칸 수정')),
-    h('div', { class: 'row', style: 'margin-top:12px;border-top:1px solid var(--line);padding-top:12px' },
+      h('button', { class: 'sm ghost', onclick: () => { RO.mode = 'edit'; redraw(); } }, '입력 칸 수정'),
+      h('div', { style: 'flex:1' }),
       setSel,
       h('button', { class: 'primary', onclick: async () => {
         const m = new Date().getMonth() + 1; const name = await askName('역할표 이름 (같은 이름이면 덮어써요)', RO.setName || `${m}월`); if (!name) return;
         if (!/^[\w:.\- 가-힣]{1,60}$/.test(name)) return toast('이름에는 글자·숫자·공백·-·. 만 쓸 수 있어요', true);
         if (RO.sets.includes(name) && name !== RO.setName && !confirm(`"${name}"이(가) 이미 있어요. 덮어쓸까요?`)) return;
         guard('저장하는 중…', async () => { await APP.kvSet(skey(name), { name, form: RO.form.name, roles: RO.roles, savedAt: Date.now() }); RO.setName = name; await loadLists(); toast(`"${name}"으로 저장했습니다`); });
-      } }, '역할표 저장')),
-    h('div', { class: 'row', style: 'margin-top:12px' }, h('button', { onclick: () => exportPng() }, 'PNG로 저장'), h('button', { onclick: () => window.print() }, '인쇄 / PDF로 저장')));
+      } }, '역할표 저장'),
+      h('button', { onclick: () => exportPng() }, 'PNG로 저장'), h('button', { onclick: () => window.print() }, '인쇄 / PDF로 저장')),
+    h('div', { class: 'muted', style: 'margin-top:8px;line-height:1.6;font-size:13px' }, '아래 양식의 칸을 눌러 바로 입력하세요. 담당자 칸을 누르면 학생을 여러 명 골라 넣을 수 있어요. ', fontNote ? fontNote.textContent : ''));
 
+  if (!edit) return h('div', null, top, busy, fillPanel, h('div', { class: 'role-stage-wrap role-full' }, stage));
   return h('div', null, top, busy,
     h('div', { class: 'role-layout' }, h('div', { class: 'role-stage-wrap' }, stage), edit ? panel : fillPanel));
 }

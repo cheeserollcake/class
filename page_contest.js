@@ -712,7 +712,7 @@ function archiveBox(redraw) {
 }
 
 /* ---------- 기록 모드: 비밀번호로 들어가고 나감. 경기 일정만 보이고 기록만 할 수 있음 ---------- */
-const REC_KEY = 'contest_rec', RW = [560, 720, 900, 1100, 1300, 0];
+const REC_KEY = 'contest_rec', RW = [560, 900, 1300, 0];
 function pwAsk(title, desc) {
   return new Promise((resolve) => {
     const input = h('input', { type: 'password', placeholder: '비밀번호', autocomplete: 'off' }), err = h('div', { class: 'err' });
@@ -737,7 +737,7 @@ async function recOpen(id, redraw) {
   if (!C.index) await loadIndex();
   const c = await getContest(id); if (!c) { try { localStorage.removeItem(REC_KEY); } catch (e) { /* 없음 */ } return; }
   const layer = h('div', { class: 'rec-layer' }); document.body.append(layer); document.body.classList.add('rec-on');
-  let wi = 2; try { wi = Math.max(0, Math.min(RW.length - 1, Number(localStorage.getItem('rec_w') ?? 2))); } catch (e) { /* 기본 */ }
+  let wi = 3; try { wi = Math.max(0, Math.min(RW.length - 1, Number(localStorage.getItem('rec_w2') ?? 3))); } catch (e) { /* 기본 */ }
   let cview = true; try { cview = localStorage.getItem('rec_cv') !== 'list'; } catch (e) { /* 기본: 경기장 보기 */ }
   const nm = (i) => (i != null && c.entrants[i] ? c.entrants[i].name : '미정');
   const draw = () => {
@@ -762,12 +762,12 @@ async function recOpen(id, redraw) {
         h('div', { class: 'rec-title' }, h('span', { class: 'cz-badge' }, '📝 기록 모드'), h('b', null, c.name), h('span', { class: 'muted' }, `${p.done} / ${p.total}경기`)),
         h('div', { class: 'rec-tools' },
           c.courts > 1 ? seg(cview ? 'c' : 'l', [['c', '경기장 보기'], ['l', '한 줄 보기']], (v) => { cview = v === 'c'; try { localStorage.setItem('rec_cv', cview ? 'court' : 'list'); } catch (e) { /* 저장 안 됨 */ } draw(); }) : null,
-          APP.widthCtl(wi, RW.length, (v) => { wi = v; try { localStorage.setItem('rec_w', wi); } catch (e) { /* 저장 안 됨 */ } draw(); }),
+          APP.widthCtl(wi, RW.length, (v) => { wi = v; try { localStorage.setItem('rec_w2', wi); } catch (e) { /* 저장 안 됨 */ } draw(); }),
           h('button', { class: 'sm danger', onclick: async () => {
             if (!(await pwAsk('기록 모드 나가기', '나가려면 선생님 비밀번호를 넣어 주세요.'))) return;
             try { localStorage.removeItem(REC_KEY); } catch (e) { /* 없음 */ }
             layer.remove(); document.body.classList.remove('rec-on'); if (redraw) redraw(); else if (APP.renderPage) APP.renderPage();
-          } }, APP.lockIc(true), ' 나가기'))),
+          } }, '나가기'))),
       h('div', { class: 'rec-prog' }, bar(p.pct, icOf(c)), h('b', null, p.pct + '%')),
       c.courts > 1 && cview
         ? [h('div', { class: 'rec-courts', style: `--cn:${c.courts}` }, Array.from({ length: c.courts }, (_, ci) => {

@@ -21,6 +21,7 @@ function buildAliases() {
   S.roster.forEach((s) => {
     add(s.name, s.num);
     if (s.name.length >= 3) add(s.name.slice(1), s.num);
+    if (s.surname && s.name.startsWith(s.surname) && s.surname.length > 1) add(s.name.slice(s.surname.length), s.num);
     String(s.title || '').split(/[,，、/\s]+/).forEach((t) => add(t, s.num));
   });
   return [...map.entries()].sort((a, b) => b[0].length - a[0].length);
@@ -363,7 +364,11 @@ function viewSearch(redraw) {
   const out = h('div');
   const list = () => {
     let logs = sortedLogs(ST.order === 'asc' ? 'asc' : 'desc');
-    if (ST.kw) logs = logs.filter((l) => l.content.toLowerCase().includes(ST.kw.toLowerCase()));
+    if (ST.kw) {   // 이름·성 뺀 이름·호칭은 모두 같은 학생으로 찾기 (김철수 = 철수)
+      const amap = new Map(buildAliases());
+      const terms = ST.kw.toLowerCase().split(/\s+/).filter(Boolean).map((t) => ({ t, nums: amap.get(t) || null }));
+      logs = logs.filter((l) => { const tx = l.content.toLowerCase(); return terms.every(({ t, nums }) => tx.includes(t) || (nums && (l._nums || []).some((n) => nums.has(n)))); });
+    }
     if (ST.stu) logs = logs.filter((l) => l._nums.includes(Number(ST.stu)));
     out.replaceChildren();
     out.append(h('div', { class: 'muted', style: 'margin-bottom:8px' }, `${logs.length}건`));
@@ -378,7 +383,7 @@ function viewSearch(redraw) {
   };
   const box = h('div', null,
     h('div', { class: 'card' }, h('div', { class: 'row' }, kwIn, sel, radios),
-      h('div', { class: 'muted', style: 'margin-top:6px' }, '"철수"처럼 성을 빼고 써도, 명렬표의 호칭으로 써도 그 학생의 기록으로 찾아요.')), out);
+      h('div', { class: 'muted', style: 'margin-top:6px' }, '"김철수"로 찾든 "철수"(성 뺀 이름·명렬표 호칭)로 찾든, 그 학생이 나온 기록을 모두 찾아요.')), out);
   list();
   return box;
 }

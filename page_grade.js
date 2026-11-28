@@ -95,11 +95,10 @@ APP.pages.grade = () => {
   const wrap = h('div', { class: 'gr-page' }), body = h('div'), tabs = h('div', { class: 'tabs' });
   // 표 너비: 맞춤(내용만큼) / 좁게 / 보통 / 꽉 차게 — 이 브라우저에 기억
   const TW = [['fit', '맞춤'], ['s', '좁게'], ['m', '보통'], ['full', '꽉 차게']];
-  let tw = 'full'; try { tw = localStorage.getItem('grade_tw') || 'full'; } catch (e) { /* 기본 */ }
-  wrap.dataset.tw = tw;
-  const twCtl = () => { const i = Math.max(0, TW.findIndex(([v]) => v === wrap.dataset.tw)); return APP.widthCtl(i, TW.length, (k) => { wrap.dataset.tw = TW[k][0]; try { localStorage.setItem('grade_tw', TW[k][0]); } catch (e) { /* 저장 안 됨 */ } drawTabs(); }); };
+  wrap.dataset.tw = 'full';
   const drawTabs = () => tabs.replaceChildren(...[['perf', '수행평가 관리'], ['etc', '기타 평가 관리'], ['trend', '성적 추이'], ['view', '성적 조회'], ['cmt', '평어 관리'], ['gen', '평어 생성']].map(([id, n]) =>
-    h('button', { class: 'tab' + (GR.tab === id ? ' active' : ''), onclick: () => { GR.tab = id; drawTabs(); draw(); } }, n)), h('div', { style: 'flex:1' }), twCtl(), h('button', { class: 'sm', onclick: exportGrades }, '내보내기'));
+    h('button', { class: 'tab' + (GR.tab === id ? ' active' : ''), onclick: () => { GR.tab = id; drawTabs(); draw(); } }, n)));
+  APP.pageTool(h('button', { onclick: exportGrades }, '내보내기'));
   const draw = async () => {
     body.replaceChildren(APP.loading());
     try {

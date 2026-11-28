@@ -303,15 +303,32 @@ function go(id) {
   if (leaving) { S.rosterDraft = null; S.rosterDirty = false; S.seatDraft = null; }
   S.tab = id; renderShell();
 }
+/* 페이지 너비 4단계 (좁게·보통·넓게·기본) — 페이지마다 이 브라우저에 기억 */
+const PW = [760, 1000, 1280, 0];
 function renderPage() {
   const main = $('#main'); main.replaceChildren();
   const t = TABS.find((x) => x.id === S.tab);
   document.title = t.name + ' · 학급관리';
-  if (S.tab === 'setup') main.append(pageSetup());
-  else if (S.tab === 'submit') main.append(pageSubmit());
-  else if (APP.pages[S.tab]) main.append(APP.pages[S.tab]());
-  else main.append(h('div', { class: 'card placeholder' }, '이 메뉴는 준비 중입니다.'));
+  let wi = 3; try { const v = localStorage.getItem('pw_' + S.tab); if (v != null) wi = Math.max(0, Math.min(3, Number(v) || 0)); } catch (e) { /* 기본 */ }
+  const body = h('div', { class: 'page-body', style: PW[wi] ? `max-width:${PW[wi]}px` : null });
+  const tools = h('div', { class: 'pt-r' });
+  const wbtn = APP.widthCtl ? APP.widthCtl(wi, 4, (k) => { try { localStorage.setItem('pw_' + S.tab, k); } catch (e) { /* 저장 안 됨 */ } renderPage(); }) : null;
+  if (wbtn) tools.append(wbtn);
+  const center = h('div', { class: 'pt-c' });
+  const top = h('div', { class: 'page-top' }, h('div', { class: 'pt-l' }), center, tools);
+  S._tools = tools; S._wbtn = wbtn;
+  let page;
+  if (S.tab === 'setup') page = pageSetup();
+  else if (S.tab === 'submit') page = pageSubmit();
+  else if (APP.pages[S.tab]) page = APP.pages[S.tab]();
+  else page = h('div', { class: 'card placeholder' }, '이 메뉴는 준비 중입니다.');
+  body.append(page); main.append(top, body);
+  // 페이지 맨 위 하위 메뉴(탭)는 가운데 줄로 옮김 (너비 버튼은 오른쪽 고정)
+  const tabs = page && page.querySelector && [...page.children].find((x) => x.classList && x.classList.contains('tabs'));
+  if (tabs) center.append(tabs);
 }
+/* 페이지 오른쪽 위(너비 버튼 왼쪽)에 버튼 붙이기 */
+function pageTool(el) { if (S._tools && el) S._tools.insertBefore(el, S._wbtn || null); }
 function lock() {
   S.unlocked = false; S.pw = ''; S.rosterDraft = null; S.rosterDirty = false; S.seatDraft = null;
   S.roster = S.roster.map((x) => ({ num: x.num, name: x.name, gender: x.gender, surname: x.surname || '' }));
@@ -761,10 +778,14 @@ function seatEditor() {
   const avN = h('input', { class: 'n', type: 'number', min: 1, max: 12, value: 2 });
   const repIn = h('input', { class: 'n', type: 'number', min: 0, max: 20, value: d.noRepeat, onchange: () => { d.noRepeat = Math.max(0, Number(repIn.value) | 0); } });
 
+  const seatSave = h('button', { class: 'primary', onclick: async () => {
+    try { await api('saveSeat', { seat: d }); S.seat = clone(d); toast('자리 설정을 저장했습니다'); }
+    catch (e) { toast(errMsg(e), true); }
+  } }, '자리 설정 저장');
   const left = h('div', { class: 'card' },
     h('div', { class: 'row gap' },
       h('span', null, '가로'), colsIn, h('span', null, '× 세로'), rowsIn,
-      h('span', { class: 'muted' }, `사용 자리 ${active}개 / 학생 ${S.roster.length}명`)),
+      h('span', { class: 'muted' }, `사용 자리 ${active}개 / 학생 ${S.roster.length}명`), h('div', { style: 'flex:1' }), seatSave),
     active < S.roster.length ? h('div', { class: 'banner warn' }, '사용 자리가 학생 수보다 적습니다.') : null,
     h('div', { class: 'row gap radios' },
       h('label', null, h('input', { type: 'radio', name: 'em', checked: ui.editMode === 'move', onchange: () => { ui.editMode = 'move'; ui.sel = null; rerender(); } }), '자리 이동 (두 자리를 차례로 누르면 서로 바뀜)'),
@@ -789,13 +810,8 @@ function seatEditor() {
       h('div', { class: 'radios' }, MODES.map(([v, n]) => h('label', null, h('input', { type: 'radio', name: 'mode', checked: d.mode === v, onchange: () => { d.mode = v; } }), n))),
       h('label', { class: 'row', style: 'gap:6px;margin-top:10px;cursor:pointer' }, h('input', { type: 'checkbox', checked: !!d.teamBalance, onchange: (e) => { d.teamBalance = e.target.checked; } }), '모둠에 남녀 최대한 같은 비율로'),
       h('div', { class: 'muted', style: 'margin-top:4px;line-height:1.6' }, '체크하면 위의 짝 규칙을 기본으로 하되, 모든 모둠을 합쳐서 남녀 비율이 최대한 1:1에 가깝도록 맞춰요. (학급 전체 성비가 1:1이 아니면 그 비율에 맞춰요)')),
-    h('div', { class: 'card' }, h('h3', null, '모둠 구성'),
-      d.teams.length ? d.teams.map((t, ti) => h('div', { class: 'list-item' },
-        h('span', { class: 'dot', style: `background:${TEAM_COLORS[ti % TEAM_COLORS.length]}` }),
-        h('input', { value: t.name, maxlength: 12, style: 'flex:1;min-width:0', oninput: (e) => { t.name = e.target.value; }, onchange: () => rerender() }),
-        h('span', { class: 'muted' }, `${t.cells.length}자리`),
-        h('button', { class: 'sm ghost', onclick: () => { d.teams.splice(ti, 1); rerender(); } }, '✕')))
-        : h('div', { class: 'muted' }, '왼쪽에서 "모둠 지정"을 고르고 여러 자리를 누른 뒤 "모둠 만들기"를 눌러 주세요.')),
+    h('div', { class: 'card' }, h('h3', null, '같은 짝·모둠 반복 방지'),
+      h('div', { class: 'row' }, h('span', null, '최근'), repIn, h('span', null, '번 동안 같은 짝·모둠이 되지 않게 (0 = 사용 안 함)'))),
     h('div', { class: 'card' }, h('h3', null, '고정 자리 (학생에게는 보이지 않음)'),
       h('div', { class: 'row' }, fixSel, h('button', { class: 'sm', onclick: () => { ui.pick = Number(fixSel.value); rerender(); } }, '자리 고르기')),
       d.fixed.map((f, i) => h('div', { class: 'list-item' }, h('span', null, `${stuName(f.num)} → ${Math.floor(f.idx / d.cols) + 1}행 ${(f.idx % d.cols) + 1}열`),
@@ -808,12 +824,14 @@ function seatEditor() {
         } }, '추가')),
       d.avoid.map((x, i) => h('div', { class: 'list-item' }, h('span', null, `${stuName(x.a)} ↔ ${stuName(x.b)} · ${x.type === 'group' ? '같은 짝·모둠 금지' : x.n + '칸 이내 금지'}`),
         h('button', { class: 'sm ghost', onclick: () => { d.avoid.splice(i, 1); rerender(); } }, '✕')))),
-    h('div', { class: 'card' }, h('h3', null, '같은 짝·모둠 반복 방지'),
-      h('div', { class: 'row' }, h('span', null, '최근'), repIn, h('span', null, '번 동안 같은 짝·모둠이 되지 않게 (0 = 사용 안 함)'))),
-    h('button', { class: 'primary', onclick: async () => {
-      try { await api('saveSeat', { seat: d }); S.seat = clone(d); toast('자리 설정을 저장했습니다'); }
-      catch (e) { toast(errMsg(e), true); }
-    } }, '자리 설정 저장'));
+    h('div', { class: 'card' }, h('h3', null, '모둠 구성'),
+      d.teams.length ? d.teams.map((t, ti) => h('div', { class: 'list-item' },
+        h('span', { class: 'dot', style: `background:${TEAM_COLORS[ti % TEAM_COLORS.length]}` }),
+        h('input', { value: t.name, maxlength: 12, style: 'flex:1;min-width:0', oninput: (e) => { t.name = e.target.value; }, onchange: () => rerender() }),
+        h('span', { class: 'muted' }, `${t.cells.length}자리`),
+        h('button', { class: 'sm ghost', onclick: () => { d.teams.splice(ti, 1); rerender(); } }, '✕')))
+        : h('div', { class: 'muted' }, '왼쪽에서 "모둠 지정"을 고르고 여러 자리를 누른 뒤 "모둠 만들기"를 눌러 주세요.'))
+    );
 
   if (!S.roster.length) return h('div', { class: 'card placeholder' }, '먼저 "학생 명렬표"를 입력해 주세요.');
   return h('div', { class: 'seat-layout' }, left, right);
@@ -990,7 +1008,7 @@ async function kvGet(keys) {
 const APP = window.APP = {
   S, h, $, api, toast, errMsg, clone, byNum, ERR, gcls, DEMO,
   pages: {}, onLock: [], onClear: [], clearPlan, subDisplayName: (st) => subDisplayName(st), byNum, queueBoardSave: (b) => queueBoardSave(b),
-  renderPage: () => renderPage(),
+  renderPage: () => renderPage(), pageTool: (el) => pageTool(el),
   kvGet, kvSet: (key, obj) => api('kvSet', { key, value: JSON.stringify(obj) }),
   kvList: async (prefix) => (await api('kvList', { prefix })).keys,
   kvDel: (key) => api('kvDel', { key }),

@@ -159,7 +159,8 @@ APP.pages.draw = () => {
     openCfg(draw);
   } }, '설정');
   const drawTabs = () => tabs.replaceChildren(...[['pick', '뽑기'], ['team', '팀 구성'], ['mani', '마니또']].map(([id, n]) =>
-    h('button', { class: 'tab' + (D.sub === id ? ' active' : ''), onclick: () => { D.sub = id; drawTabs(); draw(); } }, n)), h('div', { style: 'flex:1' }), gear);
+    h('button', { class: 'tab' + (D.sub === id ? ' active' : ''), onclick: () => { D.sub = id; drawTabs(); draw(); } }, n)));
+  APP.pageTool(gear);
   const draw = () => {
     body.replaceChildren(); document.querySelectorAll('.confetti').forEach((c) => c.remove());
     if (!roster().length) return body.append(h('div', { class: 'card placeholder' }, '먼저 학급 기초설정에서 명렬표를 입력해 주세요.'));
