@@ -335,7 +335,7 @@ svg text { font-family: Pretendard, 'Pretendard Variable', -apple-system, 'Apple
 .asm-items label { display: inline-flex; gap: 5px; align-items: center; font-size: 14px; }
 
 /* ===== 뽑기 (플랫) ===== */
-.draw-cfg { max-width: 720px; }
+.draw-cfg { max-width: none; min-height: 420px; display: flex; flex-direction: column; align-items: center; justify-content: center; }
 .draw-cfg .field { margin-bottom: 16px; }
 button.big { padding: 12px 28px; font-size: 17px; }
 .draw-bar { gap: 10px; align-items: center; }
@@ -1010,16 +1010,64 @@ button.ic-only.sm .ic-hwp, button.ic-only.sm .ic-docx, button.ic-only.sm .ic-xls
   .pt-c { grid-row: 2; grid-column: 1 / -1; }
   .pt-r { grid-row: 1; grid-column: 2; }
 }
-.wbtn { display: inline-flex; align-items: center; gap: 2px; background: #eef0f3; color: #374151; font-weight: 600; font-size: 13px !important; padding: 6px 12px !important; border-radius: 8px; white-space: nowrap; }
+.wbtn { display: inline-flex; align-items: center; gap: 2px; background: #eef0f3; color: #374151; font-weight: 600; font-size: 12.5px !important; padding: 4px 10px !important; border-radius: 8px; white-space: nowrap; }
 .wbtn:hover { background: #e2e5ea; }
 .wbtn-ar { font-size: 15px; line-height: 1; }
 
 /* ===== 버튼 크기 통일 (표 안의 작은 버튼·칸 버튼은 제외) ===== */
 #main button:not(.big):not(.slot):not(.mani-card):not(.cz-icb):not(.cz-ent):not(.cz-chip):not(.cz-cchip):not(.cz-live):not(.lv):not(.nm-cell):not(.bw-cell):not(.col-name):not(.x):not(.cell):not(.menu-fab),
 .rec-tools button, .modal .row > button, .cz-foot button {
-  min-height: 36px; font-size: 14px; padding: 6px 14px; line-height: 1.2;
+  min-height: 29px; font-size: 12.5px; padding: 4px 11px; line-height: 1.2;
 }
-#main button.ic-only, .rec-tools button.ic-only, .modal button.ic-only { padding: 6px 9px; min-width: 36px; }
+#main button.ic-only, .rec-tools button.ic-only, .modal button.ic-only { padding: 4px 7px; min-width: 29px; }
+#main button.ic-only .ic, .rec-tools button.ic-only .ic { width: 16px; height: 16px; }
+#main button.ic-only :is(.ic-hwp, .ic-docx, .ic-xlsx, .ic-gsheet, .ic-pdf, .ic-png, .ic-csv) { width: 20px; height: 20px; }
 #main :is(td, th, .cm-act, .del, .list-item, .cz-stepper, .bi, .bw-sub, .bw-title, .log-item, .flip-card, .cz-mrow, .pair-chips) button { min-height: 0 !important; padding: 3px 9px !important; font-size: 13px !important; }
 #main .bw-lock { min-height: 0 !important; padding: 1px 8px !important; }
-#main button.ic-only { padding: 6px 9px !important; }
+#main button.ic-only { padding: 4px 7px !important; }
+/* 페이지 안 팝업 */
+.ui-pop .modal { max-width: 440px; }
+.ui-msg { white-space: pre-line; line-height: 1.6; color: var(--sub); margin: 4px 0 12px; }
+.ui-pop .modal input { width: 100%; margin: 4px 0 12px; }
+.ui-btns { justify-content: flex-end; gap: 6px; }
+.page-top:has(.pt-c:empty):has(.pt-r:empty) { display: none; }
+/* 데이터 관리: 위에 사이트 아이콘 | 비밀번호, 아래 데이터 관리 — 가운데 */
+.data-page { max-width: 1000px; margin: 0 auto; }
+.data-top { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; align-items: stretch; margin-bottom: 12px; }
+.data-page .card { max-width: none !important; margin: 0 !important; }
+.data-page > .card { margin-top: 0 !important; }
+@media (max-width: 760px) { .data-top { grid-template-columns: 1fr; } }
+/* 학급 자리 배치 설정: 규칙·반복 방지(왼쪽) | 모둠 구성(오른쪽, 좁게) */
+.seat-rt { display: grid; grid-template-columns: minmax(0, 1fr) 190px; gap: 12px; align-items: start; }
+.seat-rt-l > .card:last-child, .seat-rt > .card { margin-bottom: 16px; }
+.seat-teams .list-item { gap: 4px; }
+.seat-teams .list-item input { font-size: 13px; padding: 4px 6px; }
+@media (max-width: 560px) { .seat-rt { grid-template-columns: 1fr; } }
+.ui-warn { color: var(--danger); font-weight: 600; }
+/* 선택된 버튼 색: 모두 파랑으로 통일 */
+.tone-btn.on, .bt-bold.on, .tab.active, .chip.active, .cz-seg button.on, .tw-seg button.on, .seg button.on, button.on.tab { background: var(--primary) !important; color: #fff !important; border-color: var(--primary) !important; }
+/* 성적 관리: 하위 메뉴 왼쪽, 학기 선택 오른쪽 (같은 줄) */
+.gr-page .page-body .tabs, .gr-page > div > .tabs, .gr-page .tabs { justify-content: flex-start; }
+.subrow { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+.subrow > .tabs { margin: 0; }
+/* 자리 관리 화면 */
+.seat-tools { padding: 8px 12px; }
+.seat-tools .row { margin: 0; }
+.seat-tools button.big { font-size: 13px; padding: 4px 14px; min-height: 29px; }
+.seat-view .board-front { font-size: 26px; padding: 12px; letter-spacing: 8px; }
+.seat-view .col-label.ro { font-size: 28px; padding: 8px 2px; }
+.pgrid-wrap.teams { padding: 14px; }
+.pgrid-wrap.teams ~ *, .col-labels.teams { }
+.seat-view .col-labels.teams { margin-left: 14px; margin-right: 14px; }
+.seat-view .pseat { container-type: inline-size; }
+.seat-view .pseat .pnm { font-size: 19cqw; line-height: 1.15; }
+.seat-view .pseat .pno { font-size: 9cqw; }
+.seat-view .pseat .tchip { font-size: 8.5cqw; padding: 0 4cqw; border-radius: 1.5cqw; margin-top: 1.5cqw; }
+.seat-layout { grid-template-columns: minmax(0, 1.15fr) minmax(400px, 1fr); }
+@media (max-width: 1000px) { .seat-layout { grid-template-columns: 1fr; } }
+.seat-rt { grid-template-columns: minmax(0, 1fr) 200px; }
+.seat-teams { padding: 14px; }
+.seat-teams .list-item { padding: 4px 6px; }
+.seat-teams .list-item .muted { font-size: 11px; white-space: nowrap; }
+.seat-rt-l label.row { align-items: flex-start; }
+.seat-rt-l label.row input { margin-top: 3px; }

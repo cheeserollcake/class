@@ -113,7 +113,7 @@ async function submit() {
   }
   // 그사이 다른 기기에서 같은 이름으로 냈는지 한 번 더 확인
   if ((await remoteSent()).includes(S.me)) { S.step = 'blocked'; render(); return; }
-  if (!confirm('제출할까요? 제출하면 다시 고칠 수 없어요.')) return;
+  if (!await uiConfirm('제출할까요? 제출하면 다시 고칠 수 없어요.')) return;
   sending = true;
   const body = new URLSearchParams();
   const me = stu.find((x) => x.num === S.me);

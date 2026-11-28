@@ -86,7 +86,7 @@ function manageSubj(redraw) {
     const ta = textCell(r, key); if (CM.focus === r.id) { setTimeout(() => ta.focus(), 30); CM.focus = null; }
     sSel.className = 'w-subj'; iSel.className = 'w-item'; bSel.className = 'w-band';
     return h('tr', null, h('td', { class: 'cm-sel' }, sSel), h('td', { class: 'cm-sel' }, iSel), h('td', { class: 'cm-sel' }, bSel), h('td', { class: 'cm-tcell' }, ta),
-      h('td', null, delBtn(() => { if (r.text && !confirm('이 평어를 삭제할까요?')) return; CM.kv[key] = list.filter((x) => x !== r); saveLater(key, 0); redraw(); })));
+      h('td', null, delBtn(async () => { if (r.text && !await uiConfirm('이 평어를 삭제할까요?')) return; CM.kv[key] = list.filter((x) => x !== r); saveLater(key, 0); redraw(); })));
   });
   return h('div', { class: 'card' },
     h('div', { class: 'row', style: 'gap:8px;flex-wrap:wrap;margin-bottom:10px' },
@@ -102,19 +102,19 @@ function manageSubj(redraw) {
 
 function manageCC(redraw) {
   const s = sem(), key = K.cc(s), d = CM.kv[key], subs = d.subjects;
-  const rename = (i) => {
-    const n = prompt('과목 이름', subs[i]); if (!n || !n.trim() || n.trim() === subs[i]) return;
+  const rename = async (i) => {
+    const n = await uiPrompt('과목 이름', subs[i]); if (!n || !n.trim() || n.trim() === subs[i]) return;
     if (subs.includes(n.trim())) return toast('이미 있는 과목이에요', true);
     d.rows.forEach((r) => { if (r.subj === subs[i]) r.subj = n.trim(); }); subs[i] = n.trim(); saveLater(key); redraw();
   };
-  const remove = (i) => {
+  const remove = async (i) => {
     const c = d.rows.filter((r) => r.subj === subs[i]).length;
-    if (!confirm(`"${subs[i]}" 과목을 삭제할까요?${c ? ` 이 과목의 평어 ${c}개도 함께 지워져요.` : ''}`)) return;
+    if (!await uiConfirm(`"${subs[i]}" 과목을 삭제할까요?${c ? ` 이 과목의 평어 ${c}개도 함께 지워져요.` : ''}`)) return;
     d.rows = d.rows.filter((r) => r.subj !== subs[i]); if (CM.ccF === subs[i]) CM.ccF = ''; subs.splice(i, 1); saveLater(key); redraw();
   };
   const chips = h('div', { class: 'row', style: 'gap:6px;flex-wrap:wrap' }, h('b', null, '과목'),
     subs.map((n, i) => h('span', { class: 'chip-s cm-subj' }, n, h('button', { class: 'x', title: '이름 바꾸기', onclick: () => rename(i) }, '✎'), h('button', { class: 'x', title: '삭제', onclick: () => remove(i) }, '✕'))),
-    h('button', { class: 'sm', onclick: () => { const n = prompt('추가할 과목 이름', ''); if (!n || !n.trim()) return; if (subs.includes(n.trim())) return toast('이미 있는 과목이에요', true); subs.push(n.trim()); saveLater(key); redraw(); } }, '+ 과목 추가'));
+    h('button', { class: 'sm', onclick: async () => { const n = await uiPrompt('추가할 과목 이름', ''); if (!n || !n.trim()) return; if (subs.includes(n.trim())) return toast('이미 있는 과목이에요', true); subs.push(n.trim()); saveLater(key); redraw(); } }, '+ 과목 추가'));
   if (!subs.length) return h('div', { class: 'card' }, chips, h('div', { class: 'placeholder' }, '과목을 먼저 추가해 주세요.'));
   const shown = d.rows.filter((r) => !CM.ccF || r.subj === CM.ccF).sort((a, b) => (subs.indexOf(a.subj) - subs.indexOf(b.subj)) || String(a.date || '9').localeCompare(String(b.date || '9')));
   const rows = shown.map((r) => {
@@ -123,7 +123,7 @@ function manageCC(redraw) {
     const ta = textCell(r, key); if (CM.focus === r.id) { setTimeout(() => ta.focus(), 30); CM.focus = null; }
     sSel.className = 'w-subj'; dIn.className = 'w-date';
     return h('tr', null, h('td', { class: 'cm-sel' }, sSel), h('td', { class: 'cm-sel' }, dIn), h('td', { class: 'cm-tcell' }, ta),
-      h('td', null, delBtn(() => { if (r.text && !confirm('이 평어를 삭제할까요?')) return; d.rows = d.rows.filter((x) => x !== r); saveLater(key, 0); redraw(); })));
+      h('td', null, delBtn(async () => { if (r.text && !await uiConfirm('이 평어를 삭제할까요?')) return; d.rows = d.rows.filter((x) => x !== r); saveLater(key, 0); redraw(); })));
   });
   return h('div', { class: 'card' }, chips,
     h('div', { class: 'row', style: 'gap:8px;flex-wrap:wrap;margin:12px 0 10px' },
@@ -145,7 +145,7 @@ function manageBeh(redraw) {
     const ta = textCell(r, key); if (CM.focus === r.id) { setTimeout(() => ta.focus(), 30); CM.focus = null; }
     pSel.classList.add('w-pol'); kSel.className = 'w-pol';
     return h('tr', null, h('td', { class: 'cm-sel' }, pSel), h('td', { class: 'cm-sel' }, kSel), h('td', { class: 'cm-tcell' }, ta),
-      h('td', null, delBtn(() => { if (r.text && !confirm('이 평어를 삭제할까요?')) return; CM.kv[key] = list.filter((x) => x !== r); saveLater(key, 0); redraw(); })));
+      h('td', null, delBtn(async () => { if (r.text && !await uiConfirm('이 평어를 삭제할까요?')) return; CM.kv[key] = list.filter((x) => x !== r); saveLater(key, 0); redraw(); })));
   });
   const cnt = (fn) => list.filter((r) => r.text && fn(r)).length;
   return h('div', { class: 'card' },
@@ -168,7 +168,7 @@ function bulkButtons(kind, redraw) {
     const f = e.target.files[0]; e.target.value = ''; if (!f) return;
     try { const rows = await APP.xl.readTableFile(f); const r = importRows(kind, rows); saveLater(kind === 'subj' ? K.subj(sem()) : kind === 'cc' ? K.cc(sem()) : K.beh(sem()), 0);
       toast(`${r.added}개를 추가했어요` + (r.dup ? ` · 이미 있는 ${r.dup}개는 건너뜀` : '') + (r.bad.length ? ` · ${r.bad.length}줄은 읽지 못함` : ''), !r.added && r.bad.length > 0);
-      if (r.bad.length) setTimeout(() => alert('읽지 못한 줄:\n' + r.bad.slice(0, 15).join('\n') + (r.bad.length > 15 ? `\n…외 ${r.bad.length - 15}줄` : '')), 50);
+      if (r.bad.length) setTimeout(() => uiAlert('읽지 못한 줄:\n' + r.bad.slice(0, 15).join('\n') + (r.bad.length > 15 ? `\n…외 ${r.bad.length - 15}줄` : '')), 50);
       redraw();
     } catch (x) { toast(errMsg(x), true); }
   } });
@@ -533,9 +533,9 @@ function genTable(o) {
   };
   if (!g && !o.empty) { runAll(CM.n[nKind]); }
   const n = g ? g.n : CM.n[nKind];
-  const nSel = h('select', { onchange: (e) => {
+  const nSel = h('select', { onchange: async (e) => {
     const v = Number(e.target.value);
-    if (g && !confirm(`문장 수를 ${v}개로 바꾸면 모든 학생의 평어를 새로 조합해요. 계속할까요?`)) { e.target.value = n; return; }
+    if (g && !await uiConfirm(`문장 수를 ${v}개로 바꾸면 모든 학생의 평어를 새로 조합해요. 계속할까요?`)) { e.target.value = n; return; }
     CM.n[nKind] = v; runAll(v); o.redraw();
   } }, Array.from({ length: 6 }, (_, i) => i + 1).filter((v) => v >= (o.minN || 1)).map((v) => h('option', { value: v, selected: v === n }, `${v}문장`)));
   const saveBtn = h('button', { class: 'primary', disabled: !g, onclick: async () => {
@@ -554,7 +554,7 @@ function genTable(o) {
   const state = g ? (CM.dirty[key] ? h('span', { class: 'cm-unsaved' }, '저장하지 않은 변경이 있어요') : h('span', { class: 'muted' }, g.savedAt ? '저장됨' : '')) : null;
   const top = h('div', { class: 'card' },
     h('div', { class: 'row', style: 'gap:8px;flex-wrap:wrap;align-items:center' }, ...o.head, h('span', { class: 'muted' }, '조합할 문장 수'), nSel,
-      h('button', { class: 'sm', disabled: !!o.empty, onclick: () => { if (g && !confirm('모든 학생의 평어를 새로 조합할까요? (직접 고친 내용도 바뀌어요)')) return; runAll(n); o.redraw(); } }, '전체 다시 조합'),
+      h('button', { class: 'sm', disabled: !!o.empty, onclick: async () => { if (g && !await uiConfirm('모든 학생의 평어를 새로 조합할까요? (직접 고친 내용도 바뀌어요)')) return; runAll(n); o.redraw(); } }, '전체 다시 조합'),
       h('div', { style: 'flex:1' }), state, saveBtn, expBtn),
     CM.lastNote ? h('div', { class: 'banner warn', style: 'margin:10px 0 0' }, CM.lastNote) : null);
   CM.lastNote = '';

@@ -241,7 +241,7 @@ function openCfg(redraw) {
 function viewPick(redraw) {
   const P = D.pick, pool = pickPool();
   const go = () => { actx(); P.go = true; redraw(); };
-  const reset = () => { if (!P.drawn.length && !P.last) return toast('지울 이력이 없어요'); if (!confirm(`지금까지 뽑힌 ${P.drawn.length}명의 이력을 지우고 처음부터 뽑을까요?`)) return; P.drawn = []; P.last = null; saveDrawn(); toast('이력을 지웠어요'); redraw(); };
+  const reset = async () => { if (!P.drawn.length && !P.last) return toast('지울 이력이 없어요'); if (!await uiConfirm(`지금까지 뽑힌 ${P.drawn.length}명의 이력을 지우고 처음부터 뽑을까요?`)) return; P.drawn = []; P.last = null; saveDrawn(); toast('이력을 지웠어요'); redraw(); };
   const gName = { all: '전체', m: '남자만', f: '여자만' }[P.g];
   const n = Math.max(1, Math.min(P.n, pool.length));
   if (P.go) { P.go = false; if (pool.length) return pickRun(redraw, go, reset); }
@@ -523,7 +523,7 @@ function viewMani(redraw) {
       h('span', { class: 'row', style: 'gap:6px' },
         h('button', { class: 'sm', onclick: () => { M.res = { pairs: r.pairs, broken: [], repeats: 0, note: '', seen: [], name: r.name, id: r.id, saved: true }; D.step.mani = 'run'; redraw(); } }, '열기'),
         h('button', { class: 'sm ghost', onclick: async () => {
-          if (!confirm(`"${r.name}"을(를) 삭제할까요?`)) return;
+          if (!await uiConfirm(`"${r.name}"을(를) 삭제할까요?`)) return;
           D.hist = D.hist.filter((x) => x.id !== r.id);
           try { await APP.kvSet('draw:manito', D.hist); } catch (e) { toast(errMsg(e), true); }
           redraw();
@@ -545,7 +545,7 @@ function maniRun(redraw) {
     const def = R.name || `마니또 ${new Date().getMonth() + 1}월`;
     const name = await askName('이번 마니또 저장 (이름)', def); if (!name) return;
     const dup = D.hist.find((x) => x.name === name && x.id !== R.id);
-    if (dup && !confirm(`"${name}"이(가) 이미 있어요. 덮어쓸까요?`)) return;
+    if (dup && !await uiConfirm(`"${name}"이(가) 이미 있어요. 덮어쓸까요?`)) return;
     const rec = { id: R.id || (dup && dup.id) || 'm' + Date.now().toString(36), name, date: APP.today(), created: Date.now(), pairs: R.pairs, names: Object.fromEntries(all.map((s) => [s.num, s.name])) };
     D.hist = D.hist.filter((x) => x.id !== rec.id && x.name !== name).concat(rec);
     try { await APP.kvSet('draw:manito', D.hist); R.id = rec.id; R.name = name; R.saved = true; toast(`"${name}"으로 저장했어요`); redraw(); } catch (e) { toast(errMsg(e), true); }
@@ -559,8 +559,8 @@ function maniRun(redraw) {
     h('button', { onclick: () => APP.maniDoc.hwpx(docName(), rows()) }, '한글 파일(.hwpx)'),
     h('button', { onclick: () => APP.maniDoc.docx(docName(), rows()) }, '워드 파일(.docx)'),
     h('button', { onclick: () => APP.maniDoc.print(docName(), rows()) }, '인쇄'),
-    R.saved ? null : h('button', { onclick: () => { if (!confirm('지금 결과를 버리고 다시 뽑을까요?')) return; const r = makeManito(D.mani.mode, D.cfg.maniAvoid, D.hist); D.mani.res = { ...r, seen: [], name: '', id: null }; redraw(); } }, '다시 뽑기'),
-    h('button', { onclick: () => { if (!R.saved && !confirm('저장하지 않은 결과가 사라져요. 처음 화면으로 갈까요?')) return; D.step.mani = 'cfg'; D.mani.res = null; redraw(); } }, '처음 화면으로'));
+    R.saved ? null : h('button', { onclick: async () => { if (!await uiConfirm('지금 결과를 버리고 다시 뽑을까요?')) return; const r = makeManito(D.mani.mode, D.cfg.maniAvoid, D.hist); D.mani.res = { ...r, seen: [], name: '', id: null }; redraw(); } }, '다시 뽑기'),
+    h('button', { onclick: async () => { if (!R.saved && !await uiConfirm('저장하지 않은 결과가 사라져요. 처음 화면으로 갈까요?')) return; D.step.mani = 'cfg'; D.mani.res = null; redraw(); } }, '처음 화면으로'));
   const msgs = [];
   if (R.note) msgs.push(R.note);
   if (R.broken && R.broken.length) msgs.push(`기피 설정을 모두 지킬 수 없어 ${R.broken.length}쌍은 무시했어요.`);

@@ -9,7 +9,9 @@ const { h, toast, errMsg } = APP;
 /* 보드가 여러 개: 'board:index' = { boards:[{id,name}], cur }, 보드 내용 = 'board:main'(첫 보드) 또는 'board:b:<id>' */
 const keyOf = (id) => (id === 'main' ? 'board:main' : 'board:b:' + id);
 const B = { data: null, loading: null, imgs: {}, panel: null, canvas: null, focus: null, H: 0, index: null, cache: {} };
-APP._boardState = () => B;   // 시험용
+APP._boardState = () => B;
+/* 지금 보는 학급보드판을 새 창(탭)으로 하나 더 열기 */
+const newWin = () => h('button', { class: 'sm has-ic ic-only', 'data-noic': '1', title: '새 창으로 열기', onclick: () => window.open(location.pathname + location.search + '#board', '_blank', 'noopener') }, APP.icon('newwin'), '새 창으로');   // 시험용
 const def = () => ({ items: [], layouts: {}, cfg: { showSubmit: false, submitIds: [], showEvents: false }, events: [], locked: false });
 const uid = () => 'i' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
 const PERIODS = [1, 2, 3, 4, 5, 6];
@@ -50,7 +52,7 @@ async function switchTo(id) {
   B.data = B.cache[id]; render();
 }
 async function addBoard() {
-  const name = prompt('새 보드 이름', `보드 ${B.index.boards.length + 1}`); if (!name || !name.trim()) return;
+  const name = await uiPrompt('새 보드 이름', `보드 ${B.index.boards.length + 1}`); if (!name || !name.trim()) return;
   const id = 'b' + Date.now().toString(36);
   B.index.boards.push({ id, name: name.trim().slice(0, 20) });
   B.cache[id] = norm(null);
@@ -60,7 +62,7 @@ async function addBoard() {
 async function removeBoard() {
   if (B.index.boards.length < 2) return toast('보드가 하나뿐이라 지울 수 없어요', true);
   const cur = B.index.boards.find((b) => b.id === B.index.cur);
-  if (!confirm(`"${cur.name}" 보드를 지울까요? 안의 글상자·이미지도 모두 지워져요.`)) return;
+  if (!await uiConfirm(`"${cur.name}" 보드를 지울까요? 안의 글상자·이미지도 모두 지워져요.`)) return;
   clearTimeout(saveT); saveT = null;
   B.data.items.filter((it) => it.type === 'image' && it.fileId).forEach((it) => APP.api('delFile', { fileId: it.fileId }).catch(() => {}));
   try { await APP.api('kvDel', { key: keyOf(cur.id) }); } catch (e) { /* 이미 없음 */ }
@@ -381,7 +383,7 @@ function itemEl(it, ctx) {
     const grip = h('div', { class: 'bi-grip', title: '끌어서 옮기기' }, '⠿');
     const tools = h('div', { class: 'bi-tools' },
       it.type === 'image' ? [h('button', { title: '링크 걸기', onclick: () => editLink(it) }, '🔗'), h('button', { title: '작게', onclick: () => resize(it, el, 0.85) }, '−'), h('button', { title: '크게', onclick: () => resize(it, el, 1.18) }, '+')] : null,
-      it.type === 'widget' ? null : h('button', { title: '삭제', onclick: () => { if (it.type === 'text' && (it.html || '').trim() && !confirm('이 글상자를 지울까요?')) return; removeItem(it); } }, '✕'));
+      it.type === 'widget' ? null : h('button', { title: '삭제', onclick: async () => { if (it.type === 'text' && (it.html || '').trim() && !await uiConfirm('이 글상자를 지울까요?')) return; removeItem(it); } }, '✕'));
     const rz = h('div', { class: 'bi-resize', title: '끌어서 크기 바꾸기' });
     el.append(grip, tools, rz);
     grip.addEventListener('pointerdown', (ev) => {
@@ -407,8 +409,8 @@ function itemEl(it, ctx) {
   if (B.sels && B.sels.has(it.id)) el.classList.add('sel');
   return el;
 }
-function editLink(it) {
-  const v = prompt('이미지를 누르면 열릴 주소 (https://…)\n비우면 링크를 없애요', it.link || 'https://');
+async function editLink(it) {
+  const v = await uiPrompt('이미지를 누르면 열릴 주소 (https://…)\n비우면 링크를 없애요', it.link || 'https://');
   if (v === null) return;
   const u = v.trim();
   if (u && u !== 'https://' && !safeUrl(u)) return toast('https:// 로 시작하는 주소를 넣어 주세요', true);
@@ -587,7 +589,7 @@ function pasteClip() {
 let pasteT = null;
 const boardActive = () => B.panel && B.panel.isConnected && B.data && !B.data.locked && !document.querySelector('.overlay');
 const editing = () => { const a = document.activeElement; return a && (a.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)); };
-document.addEventListener('keydown', (e) => {
+document.addEventListener('keydown', async (e) => {
   if (!boardActive() || editing()) return;
   const k = e.key.toLowerCase(), mod = e.ctrlKey || e.metaKey;
   if (mod && k === 'z') { e.preventDefault(); undo(); }
@@ -602,7 +604,7 @@ document.addEventListener('keydown', (e) => {
   else if ((k === 'delete' || k === 'backspace') && B.sels && B.sels.size) {
     const its = selItems().filter((x) => x.type !== 'widget'); if (!its.length) return;
     e.preventDefault();
-    if (its.length > 1 && !confirm(`고른 상자 ${its.length}개를 지울까요?`)) return;
+    if (its.length > 1 && !await uiConfirm(`고른 상자 ${its.length}개를 지울까요?`)) return;
     pushUndo(); const ids = new Set(its.map((x) => x.id));
     B.data.items = B.data.items.filter((x) => !ids.has(x.id)); Object.values(B.data.layouts).forEach((L) => ids.forEach((id) => delete L[id]));
     B.sels.clear(); B.sel = null; save(); render();
@@ -777,7 +779,7 @@ function drawHead() {
       : h('b', { class: 'bd-name' }, '학급보드판'),
     ...(d.locked ? [] : [h('button', { class: 'sm', onclick: addText }, '+ 글상자'), h('button', { class: 'sm', onclick: () => fileIn.click() }, '+ 이미지'), fileIn, grpBtns = h('span', { class: 'bd-grp' })]),
     h('div', { style: 'flex:1' }),
-    ...(d.locked ? [] : [h('button', { class: 'sm', onclick: settings }, '설정'), h('button', { class: 'sm', title: '열에 맞춰 다시 정렬', onclick: () => { pushUndo(); d.layouts = {}; save(); render(); } }, '자동정렬'),
+    ...(d.locked ? [newWin()] : [h('button', { class: 'sm', onclick: settings }, '설정'), newWin(), h('button', { class: 'sm', title: '열에 맞춰 다시 정렬', onclick: () => { pushUndo(); d.layouts = {}; save(); render(); } }, '자동정렬'),
       h('button', { class: 'sm', title: '빈 보드를 새로 만들어요 (지금 보드는 그대로 남아요)', onclick: addBoard }, '+ 보드 추가')]),
     h('button', { class: 'sm', title: '전체화면', onclick: () => { const w = B.panel.closest('.bd-page') || B.panel; document.fullscreenElement ? document.exitFullscreen() : (w.requestFullscreen && w.requestFullscreen()); } }, document.fullscreenElement ? '전체화면 끝' : '전체화면'),
     h('button', { class: 'sm has-ic ic-only' + (d.locked ? ' primary' : ''), 'data-noic': '1', title: d.locked ? '보드 잠김 (눌러서 풀기)' : '보드 열림 — 잠그면 학생이 보드를 고칠 수 없어요', onclick: () => { d.locked = !d.locked; save(); render(); } }, APP.lockIc(d.locked)));

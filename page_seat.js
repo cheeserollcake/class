@@ -175,7 +175,7 @@ function view(redraw) {
   const gridStyle = TG ? `grid-template-columns:${colTpl};grid-template-rows:${rowTpl}` : `grid-template-columns:repeat(${geo.cols},1fr)`;
   const grid = h('div', { class: 'pgrid' + (TG ? ' teams' : ''), style: gridStyle });
   const tline = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); tline.setAttribute('class', 'tline');
-  const gwrap = h('div', { class: 'pgrid-wrap' }, grid, tline);
+  const gwrap = h('div', { class: 'pgrid-wrap' + (hasT && showT ? ' teams' : '') }, grid, tline);
   const cells = [];
   const by = rosterBy();
   const paint = (c, n, extra) => {
@@ -206,17 +206,20 @@ function view(redraw) {
     tline.setAttribute('width', gwrap.clientWidth); tline.setAttribute('height', gwrap.clientHeight);
     const box = (i) => { const el = cells[i] && cells[i].el; return el ? { l: el.offsetLeft, t: el.offsetTop, r: el.offsetLeft + el.offsetWidth, b: el.offsetTop + el.offsetHeight } : null; };
     // 칸의 테두리 구역: 이웃 칸과의 한가운데까지 (이웃이 없으면 e만큼)
-    const rect = (i) => {
+    // 같은 모둠 이웃과는 한가운데에서 만나고, 바깥쪽은 어디서나 같은 간격(M) → 카드가 테두리 안 가운데에 놓임
+    const M = G + 5;
+    const rect = (i, ti) => {
       const q = box(i); if (!q) return null; const r0 = Math.floor(i / geo.cols), c0 = i % geo.cols;
-      const L = c0 > 0 ? box(i - 1) : null, Rr = c0 < geo.cols - 1 ? box(i + 1) : null, T = r0 > 0 ? box(i - geo.cols) : null, Bb = box(i + geo.cols);
-      return { l: L ? (L.r + q.l) / 2 : q.l - e, r: Rr ? (q.r + Rr.l) / 2 : q.r + e, t: T ? (T.b + q.t) / 2 : q.t - e, b: Bb ? (q.b + Bb.t) / 2 : q.b + e };
+      const sm = (dr, dc) => tOf(r0 + dr, c0 + dc) === ti;
+      const L = sm(0, -1) ? box(i - 1) : null, Rr = sm(0, 1) ? box(i + 1) : null, T = sm(-1, 0) ? box(i - geo.cols) : null, Bb = sm(1, 0) ? box(i + geo.cols) : null;
+      return { l: L ? (L.r + q.l) / 2 : q.l - M, r: Rr ? (q.r + Rr.l) / 2 : q.r + M, t: T ? (T.b + q.t) / 2 : q.t - M, b: Bb ? (q.b + Bb.t) / 2 : q.b + M };
     };
     const C = geo.cols, R = Math.ceil(geo.cells.length / C);
     const tOf = (r, c) => (r < 0 || c < 0 || r >= R || c >= C) ? -1 : (tmap.has(r * C + c) ? tmap.get(r * C + c) : -1);
     geo.teams.forEach((tm, ti) => {
       const col = dark(TEAM_COLORS[ti % TEAM_COLORS.length]); let path = '';
       tm.cells.forEach((i) => {
-        const r = Math.floor(i / C), c = i % C, q = rect(i); if (!q) return;
+        const r = Math.floor(i / C), c = i % C, q = rect(i, ti); if (!q) return;
         const same = (dr, dc) => tOf(r + dr, c + dc) === ti;
         const bnd = { T: !same(-1, 0), B: !same(1, 0), L: !same(0, -1), Rt: !same(0, 1) };
         // 각 변: 바깥쪽이면 안쪽으로 d만큼 들여서 선을 그림. 끝은 볼록 모서리면 줄이고, 오목 모서리면 늘림
@@ -283,7 +286,7 @@ function view(redraw) {
   const saveBtn = h('button', { disabled: !asg || SE.busy, onclick: async () => {
     const name = await askName(SE.loadedName || defaultName()); if (!name) return;
     if (!/^[\w:.\- 가-힣]{1,60}$/.test(name)) return toast('이름에는 글자·숫자·공백·-·. 만 쓸 수 있어요', true);
-    if ((SE.names || []).some((x) => x.name === name) && !confirm(`"${name}"이(가) 이미 있어요. 덮어쓸까요?`)) return;
+    if ((SE.names || []).some((x) => x.name === name) && !await uiConfirm(`"${name}"이(가) 이미 있어요. 덮어쓸까요?`)) return;
     try { await APP.kvSet(lk(name), { name, savedAt: Date.now(), cols: geo.cols, rows: geo.rows, gw: geo.gw, gh: geo.gh, cells: geo.cells, teams: geo.teams || [], colNames: cfg.colNames || [], assign: asg }); SE.loadedName = name; await loadNames(); toast(`"${name}"으로 저장했습니다`); redraw(); } catch (e) { toast(errMsg(e), true); }
   } }, '저장');
   const loadSel = h('select', { onchange: async (e) => {
@@ -292,7 +295,7 @@ function view(redraw) {
       SE.cur = { cols: l.cols, rows: l.rows, gw: l.gw, gh: l.gh, cells: l.cells, teams: l.teams || [], assign: l.assign, notes: [] }; SE.loadedName = name; SE.sel = null; redraw(); } catch (x) { toast(errMsg(x), true); }
   } }, h('option', { value: '' }, SE.names.length ? '저장된 자리 불러오기…' : '저장된 자리가 없습니다'), SE.names.map((x) => h('option', { value: x.name, selected: x.name === SE.loadedName }, x.name)));
   const delBtn = h('button', { class: 'ghost', hidden: !SE.loadedName, onclick: async () => {
-    if (!confirm(`저장된 "${SE.loadedName}"을(를) 삭제할까요?`)) return;
+    if (!await uiConfirm(`저장된 "${SE.loadedName}"을(를) 삭제할까요?`)) return;
     try { await APP.kvDel(lk(SE.loadedName)); SE.loadedName = ''; await loadNames(); redraw(); } catch (e) { toast(errMsg(e), true); }
   } }, '이 저장본 삭제');
   const exportBtn = h('button', { onclick: async () => {
@@ -315,9 +318,9 @@ function view(redraw) {
   const sound = h('label', { class: 'muted', style: 'display:inline-flex;gap:6px;align-items:center' }, h('input', { type: 'checkbox', checked: SE.sound, onchange: (e) => { SE.sound = e.target.checked; } }), '두근 소리');
 
   return h('div', null,
-    h('div', { class: 'card' },
+    h('div', { class: 'card seat-tools' },
       h('div', { class: 'row gap' }, shuffleBtn, skipBtn, saveBtn, loadSel, delBtn, exportBtn, teamTog, sound)),
-    h('div', { class: 'card' },
+    h('div', { class: 'card seat-view' },
       banner,
       h('div', { class: 'board-front' }, '칠 판'),
       h('div', { class: 'col-labels' + (TG ? ' teams' : ''), style: TG ? `grid-template-columns:${colTpl}` : `grid-template-columns:repeat(${geo.cols},1fr)` }, Array.from({ length: geo.cols }, (_, c) => h('div', { class: 'col-label ro', style: TG ? `grid-column:${colTrack[c]}` : null }, (cfg.colNames && cfg.colNames[c]) || String(c + 1)))),

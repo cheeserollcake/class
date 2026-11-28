@@ -111,6 +111,10 @@ APP.pages.grade = () => {
       else if (GR.tab === 'gen') v = await APP.comment.generate(draw);
       else { await loadAll(); v = GR.tab === 'trend' ? viewTrend(draw) : viewLookup(draw); }
       body.replaceChildren(v);
+      // 하위 메뉴는 왼쪽, 1학기·2학기는 같은 줄 오른쪽
+      const sem = body.querySelector('.sem-tabs'), subs = [...body.querySelectorAll('.tabs:not(.sem-tabs)')].filter((t) => sem && (t.compareDocumentPosition(sem) & Node.DOCUMENT_POSITION_FOLLOWING));
+      if (sem && subs.length) { const first = subs[subs.length - 1], row = h('div', { class: 'subrow' }); first.replaceWith(row); row.append(first, sem); }
+      else if (sem) { const row = h('div', { class: 'subrow' }); sem.replaceWith(row); row.append(h('div'), sem); }
     } catch (e) { body.replaceChildren(h('div', { class: 'banner warn' }, errMsg(e))); }
   };
   wrap.append(tabs, body); drawTabs(); draw();
@@ -136,7 +140,7 @@ async function exportGrades() {
   APP.exporter.open({ title: '성적', items, empty: '내보낼 평가가 아직 없어요' });
 }
 
-const semToggle = (redraw) => h('div', { class: 'tabs' }, ['1', '2'].map((s) =>
+const semToggle = (redraw) => h('div', { class: 'tabs sem-tabs' }, ['1', '2'].map((s) =>
   h('button', { class: 'tab sm' + (GR.sem === s ? ' active' : ''), onclick: () => { GR.sem = s; GR.subId = null; redraw(); } }, s + '학기')));
 /* 표 안의 입력칸을 화살표로 이동 (data-r: 학생, data-c: 칸) */
 function gridNav(wrap) {
@@ -169,7 +173,7 @@ function perfBase(redraw) {
     labels.map((l, i) => h('input', { value: l, style: 'width:96px', onchange: (e) => { labels[i] = e.target.value.trim() || l; dirty(); redraw(); } })));
   const cards = subs.map((sb, si) => h('div', { class: 'card' },
     h('div', { class: 'row gap' }, h('input', { value: sb.name, placeholder: '과목명', style: 'font-weight:700;width:180px', onchange: (e) => { sb.name = e.target.value; dirty(); } }),
-      h('button', { class: 'sm ghost', onclick: () => { if (confirm(`"${sb.name}" 과목을 삭제할까요? (입력한 점수는 시트에 남아 있어요)`)) { subs.splice(si, 1); dirty(); redraw(); } } }, '과목 삭제')),
+      h('button', { class: 'sm ghost', onclick: async () => { if (await uiConfirm(`"${sb.name}" 과목을 삭제할까요? (입력한 점수는 시트에 남아 있어요)`)) { subs.splice(si, 1); dirty(); redraw(); } } }, '과목 삭제')),
     h('div', { class: 'table-wrap' }, h('table', { class: 'roster survey' },
       h('thead', null, h('tr', null, h('th', null, '평가기준'), h('th', null, '만점'), [0, 1, 2].map((i) => h('th', null, `${labels[i]} 기준(이상)`)), h('th', null, `${labels[3]}`), h('th', null, ''))),
       h('tbody', null, sb.items.map((it, ii) => h('tr', null,
@@ -290,7 +294,7 @@ function evalForm(ev, redraw) {
       h('div', { class: 'row', style: 'justify-content:flex-end' },
         h('button', { onclick: () => { GR.creating = false; GR.editing = false; redraw(); } }, '취소'),
         !isNew && !e.fixed ? h('button', { class: 'danger', onclick: async () => {
-          if (!confirm(`"${e.name}" 평가를 삭제할까요? 입력한 점수도 사라집니다.`)) return;
+          if (!await uiConfirm(`"${e.name}" 평가를 삭제할까요? 입력한 점수도 사라집니다.`)) return;
           try { GR.cfg.evals = GR.cfg.evals.filter((x) => x.id !== e.id); await saveCfg(); await APP.kvDel(evalKey(e.id)); delete GR.data[evalKey(e.id)]; GR.evalId = null; GR.editing = false; redraw(); } catch (x) { toast(errMsg(x), true); }
         } }, '평가 삭제') : null,
         h('button', { class: 'primary', onclick: async () => {
@@ -347,14 +351,14 @@ async function evalEntry(ev, redraw) {
   upStats();
   const colHead = (c) => h('th', { class: 'col-th' + (c.locked ? ' locked' : '') },
     h('button', { class: 'col-name', title: c.locked ? '눌러서 잠금 풀기' : '눌러서 잠그기', onclick: async () => { c.locked = !c.locked; try { await saveCfg(); } catch (x) { toast(errMsg(x), true); } redraw(); } }, c.locked ? APP.lockIc(true) : null, c.locked ? ' ' : null, c.name),
-    h('button', { class: 'col-edit', title: '열 이름 바꾸기', onclick: async () => { const n = prompt('열 이름', c.name); if (!n || !n.trim()) return; c.name = n.trim().slice(0, 20); try { await saveCfg(); } catch (x) { toast(errMsg(x), true); } redraw(); } }, '✎'),
+    h('button', { class: 'col-edit', title: '열 이름 바꾸기', onclick: async () => { const n = await uiPrompt('열 이름', c.name); if (!n || !n.trim()) return; c.name = n.trim().slice(0, 20); try { await saveCfg(); } catch (x) { toast(errMsg(x), true); } redraw(); } }, '✎'),
     cols.length > 1 ? h('button', { class: 'col-edit', title: '열 삭제', onclick: async () => {
-      if (!confirm(`"${c.name}" 열을 삭제할까요? 이 열에 입력한 점수도 지워져요.`)) return;
+      if (!await uiConfirm(`"${c.name}" 열을 삭제할까요? 이 열에 입력한 점수도 지워져요.`)) return;
       ev.cols = cols.filter((x) => x !== c); Object.values(d.scores).forEach((o) => { if (o && typeof o === 'object') delete o[c.id]; });
       try { await saveCfg(); await APP.kvSet(key, d); } catch (x) { toast(errMsg(x), true); } redraw();
     } }, '✕') : null);
   const addCol = async () => {
-    const n = prompt('새 열 이름', `${cols.length + 1}회`); if (!n || !n.trim()) return;
+    const n = await uiPrompt('새 열 이름', `${cols.length + 1}회`); if (!n || !n.trim()) return;
     cols.forEach((c) => { c.locked = true; });   // 새 열을 만들면 앞의 열은 잠가서 실수로 고치지 않게
     ev.cols = [...cols, { id: uid('c'), name: n.trim().slice(0, 20) }];
     try { await saveCfg(); } catch (x) { toast(errMsg(x), true); } redraw();
@@ -363,9 +367,9 @@ async function evalEntry(ev, redraw) {
     ev.type === 'score' ? [cols.map(colHead), h('th', null, h('button', { class: 'sm', onclick: addCol }, '+ 열 추가'))] : ev.items.map((it, i) => h('th', { title: `정답 ${it.ans} / ${Math.round(it.pts * 100) / 100}점` }, i + 1)),
     h('th', null, ev.type === 'score' ? '평균' : '총점'), h('th', null, ev.cut != null ? `기준 ${ev.cut}점` : '결과'));
   const subTabs = ev.group === 'base' ? h('div', { class: 'tabs', style: 'margin-bottom:10px' }, GR.cfg.evals.filter((x) => x.group === 'base').map((x) =>
-    h('button', { class: 'tab' + (x.id === ev.id ? ' active' : ''), onclick: () => { if (GR.dirty && !confirm('저장하지 않은 입력이 있어요. 다른 과목으로 갈까요?')) return; GR.dirty = false; GR.evalId = x.id; redraw(); } }, x.sub))) : null;
+    h('button', { class: 'tab' + (x.id === ev.id ? ' active' : ''), onclick: async () => { if (GR.dirty && !await uiConfirm('저장하지 않은 입력이 있어요. 다른 과목으로 갈까요?')) return; GR.dirty = false; GR.evalId = x.id; redraw(); } }, x.sub))) : null;
   const delBtn = ev.fixed ? null : h('button', { class: 'sm danger', onclick: async () => {
-    if (!confirm(`"${ev.name}" 평가를 삭제할까요? 입력한 점수도 모두 사라져요.`)) return;
+    if (!await uiConfirm(`"${ev.name}" 평가를 삭제할까요? 입력한 점수도 모두 사라져요.`)) return;
     try { GR.cfg.evals = GR.cfg.evals.filter((x) => x.id !== ev.id); await saveCfg(); await APP.kvDel(key); delete GR.data[key]; GR.evalId = null; GR.dirty = false; toast('평가를 삭제했어요'); redraw(); } catch (x) { toast(errMsg(x), true); }
   } }, '평가 삭제');
   const pdfBtn = ev.type === 'answers' ? h('button', { class: 'sm', onclick: () => pdfGrade(ev, d, key, redraw) }, '📄 PDF로 정답·답안 불러오기') : null;
@@ -544,7 +548,7 @@ function pdfGrade(ev, d, key, redraw) {
             const dup = ok.map((r) => r.who).filter((v, i, a) => a.indexOf(v) !== i);
             if (dup.length) return toast(`같은 학생이 두 번 골라졌어요: ${dup.map((n) => (roster.find((s) => s.num === n) || {}).name).join(', ')}`, true);
             const over = ok.filter((r) => d.answers[r.who] && d.answers[r.who].some((x) => String(x || '').trim())).length;
-            if (over && !confirm(`이미 답이 입력된 학생 ${over}명은 새 답으로 바뀌어요. 계속할까요?`)) return;
+            if (over && !await uiConfirm(`이미 답이 입력된 학생 ${over}명은 새 답으로 바뀌어요. 계속할까요?`)) return;
             ok.forEach((r) => { d.answers[r.who] = ev.items.map((_, i) => String(r.ans[i] || '').trim()); });
             try { await APP.kvSet(key, d); GR.dirty = false; toast(`${ok.length}명의 답을 넣고 채점했어요`); close(); } catch (x) { toast(errMsg(x), true); }
           } }, '채점 결과 반영'))) : null);

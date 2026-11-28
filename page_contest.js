@@ -492,7 +492,7 @@ function resultDialog(c, m, nm, onSave, onDelete) {
         sa === sb && needWinner ? h('p', { class: 'muted', style: 'text-align:center;color:var(--danger);margin:4px 0 0;font-size:13px' }, '비기면 저장할 수 없어요. 이긴 쪽 점수를 더 높게 적어 주세요.') : null].filter(Boolean));
     }
     foot.replaceChildren(h('div', { class: 'row', style: 'gap:6px' }, r ? h('button', { class: 'danger', onclick: () => done(null) }, '기록 지우기') : null,
-      onDelete ? h('button', { class: 'ghost', title: '이 경기를 일정에서 아예 빼요', onclick: () => { if (!confirm('이 경기를 일정에서 삭제할까요? 기록도 함께 지워져요.')) return; dl.close(); onDelete(); } }, '경기 삭제') : null),
+      onDelete ? h('button', { class: 'ghost', title: '이 경기를 일정에서 아예 빼요', onclick: async () => { if (!await uiConfirm('이 경기를 일정에서 삭제할까요? 기록도 함께 지워져요.')) return; dl.close(); onDelete(); } }, '경기 삭제') : null),
       h('div', { class: 'row', style: 'gap:6px' }, h('button', { onclick: dl.close }, '취소'), c.scoring === 'wdl' ? null : h('button', { class: 'primary', disabled: sa === sb && needWinner, onclick: () => done({ sa, sb, w: sa > sb ? 'a' : sb > sa ? 'b' : 'd' }) }, '저장')));
   };
   rd();
@@ -569,8 +569,14 @@ function compView(c, redraw) {
         !isL ? h('button', { class: 'sm', title: '대진표 모양 바꾸기', onclick: () => { C.bmode = C.bmode === 'h' ? 'v' : 'h'; saveView(); redraw(); } }, C.bmode === 'h' ? '⇄ 가로' : '⇅ 세로') : null,
         !played ? h('button', { class: 'sm', title: isL ? '경기 순서를 무작위로 다시 짜요' : '대진을 무작위로 다시 짜요', onclick: shuffleIt }, '🔀 대진표 섞기') : null,
         h('button', { class: 'sm', onclick: () => editDialog(c, upd) }, '⚙ 설정'),
-        h('button', { class: 'sm', disabled: !played, onclick: () => { if (!confirm('경기 기록을 모두 지울까요? 대진과 참가자는 그대로 두고 결과만 지워요.')) return; c.res = {}; c.live = {}; upd(); } }, '기록 초기화'),
-        h('button', { class: 'sm', title: '보관함으로 보내기', onclick: () => { if (!confirm(`'${c.name}' 대회를 보관함으로 보낼까요? 기록은 그대로 남고, 보관함에서 다시 꺼내거나 삭제할 수 있어요.`)) return; c.archived = true; C.cur = null; saveNow(c).then(redraw); } }, '🗄 보관'))),
+        h('button', { class: 'sm', disabled: !played, onclick: async () => { if (!await uiConfirm('경기 기록을 모두 지울까요? 대진과 참가자는 그대로 두고 결과만 지워요.')) return; c.res = {}; c.live = {}; upd(); } }, '기록 초기화'),
+        h('button', { class: 'sm has-ic ic-only', 'data-noic': '1', title: '대회 삭제', onclick: async () => {
+          if (!await uiTypeConfirm('대회 삭제', `'${c.name}' 대회를 완전히 삭제해요.\n참가자·대진표·경기 기록이 모두 지워지고 되돌릴 수 없어요.`, '삭제')) return;
+          C.index.list = C.index.list.filter((q) => q.id !== c.id); delete C.cache[c.id]; C.cur = null;
+          try { await APP.kvDel(keyOf(c.id)); await APP.kvSet('contest:index', C.index); toast('대회를 삭제했어요'); } catch (e) { toast(errMsg(e), true); }
+          redraw();
+        } }, APP.icon('trash'), '대회 삭제'),
+        h('button', { class: 'sm', title: '보관함으로 보내기', onclick: async () => { if (!await uiConfirm(`'${c.name}' 대회를 보관함으로 보낼까요? 기록은 그대로 남고, 보관함에서 다시 꺼내거나 삭제할 수 있어요.`)) return; c.archived = true; C.cur = null; saveNow(c).then(redraw); } }, '🗄 보관'))),
     h('div', { class: 'cz-prog' }, bar(pct, icOf(c)), h('b', { class: 'cz-pct' }, pct + '%'), champ ? h('span', { class: 'cz-champ' }, `🏆 우승 ${champ}`) : null));
 
   // 참가자 카드
@@ -701,7 +707,7 @@ function archiveBox(redraw) {
         h('div', { style: 'flex:1;min-width:0' }, h('b', null, x.name), h('span', { class: 'muted', style: 'font-size:13px' }, ` ${x.format === 'league' ? '리그' : '토너먼트'} · ${UNIT[x.unit] || ''} · ${x.total ? Math.round(x.done / x.total * 100) : 0}%`)),
         h('button', { class: 'sm', onclick: async () => { const c = await getContest(x.id); x.archived = false; if (c) { delete c.archived; await saveNow(c); } else saveIndex(); C.cur = x.id; rd(); redraw(); } }, '꺼내기'),
         h('button', { class: 'sm ghost', onclick: async () => {
-          if (!confirm(`'${x.name}' 대회를 삭제할까요? 경기 기록도 함께 삭제되고 되돌릴 수 없어요.`)) return;
+          if (!await uiConfirm(`'${x.name}' 대회를 삭제할까요? 경기 기록도 함께 삭제되고 되돌릴 수 없어요.`)) return;
           C.index.list = C.index.list.filter((q) => q !== x); delete C.cache[x.id];
           try { await APP.kvDel(keyOf(x.id)); await APP.kvSet('contest:index', C.index); } catch (e) { toast(errMsg(e), true); }
           rd(); redraw();
@@ -808,7 +814,7 @@ APP.pages.contest = () => {
         return h('button', { type: 'button', class: 'cz-cchip' + (x.id === C.cur ? ' on' : ''), onclick: () => { C.cur = x.id; redraw(); } },
           h('span', { class: 'cz-ctop' }, h('span', { class: 'cz-badge' }, x.format === 'league' ? '리그' : '토너먼트'), h('b', null, x.name)),
           h('span', { class: 'cz-cbar' }, bar(pct, icOf(x)), h('em', null, pct + '%'))); })),
-      h('div', { class: 'cz-topbtns' }, h('button', { class: 'sm primary', onclick: create }, '+ 대회 만들기'), h('button', { class: 'sm', onclick: () => archiveBox(redraw) }, '🗄 보관함' + (kept ? ` ${kept}` : ''))));
+      h('div', { class: 'cz-topbtns' }, h('button', { class: 'sm primary', onclick: create }, '+ 대회 만들기'), h('button', { class: 'sm', onclick: () => archiveBox(redraw) }, '🗄 보관함' + (kept ? ` ${kept}` : '')), APP.takeWidthBtn ? APP.takeWidthBtn() : null));
     if (!live.length) return wrap.replaceChildren(top, h('div', { class: 'card cz-empty' }, h('div', { class: 'muted', style: 'margin-bottom:14px' }, '진행 중인 대회가 없어요. 먼저 새 대회를 만들어 주세요.'), h('button', { class: 'primary big', onclick: create }, '+ 대회 만들기')));
     const body = h('div', null, APP.loading());
     wrap.replaceChildren(top, body);

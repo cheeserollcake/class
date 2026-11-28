@@ -200,7 +200,7 @@ async function maybeImportDemo(j) {
   const sample = new Set(demoRoster().map((x) => x.name));
   const meaningful = (db.roster || []).some((r) => !sample.has(r.name)) || Object.keys(db.kv || {}).length || (db.logs || []).length || (db.boards || []).length;
   if (!meaningful || (j.roster || []).length || (j.boards || []).length) return false;
-  if (!confirm('이 브라우저에 데모 모드로 저장해 둔 학급 정보가 있어요.\n내 구글 계정으로 가져올까요?\n(데모에 있던 내용은 그대로 남아요)')) { localStorage.setItem(flag, 'no'); return false; }
+  if (!await uiConfirm('이 브라우저에 데모 모드로 저장해 둔 학급 정보가 있어요.\n내 구글 계정으로 가져올까요?\n(데모에 있던 내용은 그대로 남아요)')) { localStorage.setItem(flag, 'no'); return false; }
   $('#app').replaceChildren(h('div', { class: 'center-screen' }, h('div', { class: 'muted' }, '데모 내용을 내 계정으로 옮기는 중… (잠시만 기다려 주세요)')));
   try { await APP.google.importDemo(db); localStorage.setItem(flag, 'yes'); return true; }
   catch (e) { toast(errMsg(e), true); return false; }
@@ -213,6 +213,8 @@ async function startApp() {
     if (!DEMO && await maybeImportDemo(j)) return startApp();
     S.email = j.email; S.roster = j.roster || []; S.seat = normSeat(j.seat); S.boards = j.boards || []; S.defaultPw = j.defaultPw;
     if (!S.curBoard && S.boards.length) S.curBoard = S.boards[0].id;
+    // 주소 뒤 #board 처럼 메뉴를 적으면 그 메뉴로 열기 (학급보드판 "새 창으로")
+    const ht = location.hash.slice(1); const tt = TABS.find((x) => x.id === ht); if (tt && !tt.pw) S.tab = ht;
     renderShell(); loadIcon();
     if (APP.contestRecResume) APP.contestRecResume();
   } catch (e) {
@@ -293,13 +295,13 @@ function renderShell() {
   document.body.classList.toggle('nav-off', closed);
   renderPage();
 }
-function go(id) {
+async function go(id) {
   const leaving = S.tab === 'setup' && id !== 'setup';
-  if (leaving && S.rosterDirty && !confirm('저장하지 않은 명렬표 변경이 있습니다. 이동할까요?')) return;
+  if (leaving && S.rosterDirty && !await uiConfirm('저장하지 않은 명렬표 변경이 있습니다. 이동할까요?')) return;
   const t = TABS.find((x) => x.id === id);
   if (t.pw && !S.unlocked) return askPw(() => go(id));
   // 초기 비밀번호(000000)로는 다른 잠긴 메뉴를 쓸 수 없게 → 먼저 바꾸게 함
-  if (t.pw && S.defaultPw && !DEMO && !(id === 'setup' && S.setupSub === 'pw')) { S.setupSub = 'pw'; S.tab = 'setup'; toast('초기 비밀번호(000000)를 먼저 바꿔 주세요'); renderShell(); return; }
+  if (t.pw && S.defaultPw && !DEMO && !(id === 'setup' && S.setupSub === 'data')) { S.setupSub = 'data'; S.tab = 'setup'; toast('초기 비밀번호(000000)를 먼저 바꿔 주세요'); renderShell(); return; }
   if (leaving) { S.rosterDraft = null; S.rosterDirty = false; S.seatDraft = null; }
   S.tab = id; renderShell();
 }
@@ -310,9 +312,10 @@ function renderPage() {
   const t = TABS.find((x) => x.id === S.tab);
   document.title = t.name + ' · 학급관리';
   let wi = 3; try { const v = localStorage.getItem('pw_' + S.tab); if (v != null) wi = Math.max(0, Math.min(3, Number(v) || 0)); } catch (e) { /* 기본 */ }
-  const body = h('div', { class: 'page-body', style: PW[wi] ? `max-width:${PW[wi]}px` : null });
+  const body = h('div', { class: 'page-body', style: PW[wi] && !['board', 'draw', 'submit', 'seat'].includes(S.tab) ? `max-width:${PW[wi]}px` : null });
   const tools = h('div', { class: 'pt-r' });
-  const wbtn = APP.widthCtl ? APP.widthCtl(wi, 4, (k) => { try { localStorage.setItem('pw_' + S.tab, k); } catch (e) { /* 저장 안 됨 */ } renderPage(); }) : null;
+  const NOW = ['board', 'draw', 'submit', 'seat'];   // 너비 버튼을 두지 않는 페이지
+  const wbtn = APP.widthCtl && !NOW.includes(S.tab) ? APP.widthCtl(wi, 4, (k) => { try { localStorage.setItem('pw_' + S.tab, k); } catch (e) { /* 저장 안 됨 */ } renderPage(); }) : null;
   if (wbtn) tools.append(wbtn);
   const center = h('div', { class: 'pt-c' });
   const top = h('div', { class: 'page-top' }, h('div', { class: 'pt-l' }), center, tools);
@@ -328,6 +331,8 @@ function renderPage() {
   if (tabs) center.append(tabs);
 }
 /* 페이지 오른쪽 위(너비 버튼 왼쪽)에 버튼 붙이기 */
+/* 너비 버튼을 페이지 안 원하는 곳으로 옮기기 (대회 관리 등) */
+function takeWidthBtn() { return S._wbtn || null; }
 function pageTool(el) { if (S._tools && el) S._tools.insertBefore(el, S._wbtn || null); }
 function lock() {
   S.unlocked = false; S.pw = ''; S.rosterDraft = null; S.rosterDirty = false; S.seatDraft = null;
@@ -384,12 +389,13 @@ setInterval(() => { if (S.unlocked && !S.rosterDirty && Date.now() - lastAct > 1
    학급 기초설정
    ===================================================== */
 function pageSetup() {
-  const subs = [['roster', '학생 명렬표'], ['seat', '학급 자리 배치'], ['pw', '비밀번호 변경'], ['data', '데이터 관리']];
-  if (S.defaultPw && !DEMO) S.setupSub = 'pw';
+  const subs = [['roster', '학생 명렬표'], ['seat', '학급 자리 배치'], ['data', '데이터 관리']];
+  if (S.defaultPw && !DEMO) S.setupSub = 'data';
+  if (S.setupSub === 'pw') S.setupSub = 'data';
   const wrap = h('div', null,
-    S.defaultPw ? h('div', { class: 'banner warn' }, DEMO ? '초기 비밀번호(000000)를 사용 중입니다. "비밀번호 변경"에서 바꿔 주세요.' : '안전을 위해 초기 비밀번호(000000)를 먼저 바꿔야 다른 메뉴를 쓸 수 있어요.') : null,
+    S.defaultPw ? h('div', { class: 'banner warn' }, DEMO ? '초기 비밀번호(000000)를 사용 중입니다. "데이터 관리"의 비밀번호 변경에서 바꿔 주세요.' : '안전을 위해 초기 비밀번호(000000)를 먼저 바꿔야 다른 메뉴를 쓸 수 있어요.') : null,
     h('div', { class: 'tabs' }, subs.map(([id, name]) => h('button', { class: 'tab' + (S.setupSub === id ? ' active' : ''), onclick: () => { S.setupSub = id; renderPage(); } }, name))));
-  wrap.append(S.setupSub === 'roster' ? rosterEditor() : S.setupSub === 'seat' ? seatEditor() : S.setupSub === 'data' ? h('div', null, iconEditor(), dataEditor()) : pwEditor());
+  wrap.append(S.setupSub === 'roster' ? rosterEditor() : S.setupSub === 'seat' ? seatEditor() : h('div', { class: 'data-page' }, h('div', { class: 'data-top' }, iconEditor(), pwEditor()), dataEditor()));
   return wrap;
 }
 
@@ -510,7 +516,7 @@ function dataEditor() {
   }
   async function run() {
     const names = CLEAR_ITEMS.filter(([k]) => clearSel.has(k)).map(([, n]) => '· ' + n).join('\n');
-    const typed = prompt(`아래 데이터를 삭제할까요? 되살릴 수 없어요.\n\n${names}\n\n계속하려면 "삭제"라고 입력하세요.`);
+    const typed = await uiPrompt(`아래 데이터를 삭제할까요? 되살릴 수 없어요.\n\n${names}\n\n계속하려면 "삭제"라고 입력하세요.`);
     if (typed == null) return;
     if (typed.trim() !== '삭제') return toast('"삭제"라고 입력해야 지워져요', true);
     box.querySelectorAll('button').forEach((b) => { b.disabled = true; });
@@ -806,12 +812,20 @@ function seatEditor() {
       preset('개별', 1, 1), preset('짝', 2, 1), preset('4인 모둠', 2, 2), preset('6인 모둠', 3, 2)));
 
   const right = h('div', null,
+    h('div', { class: 'seat-rt' }, h('div', { class: 'seat-rt-l' },
     h('div', { class: 'card' }, h('h3', null, '자리 배치 규칙'),
       h('div', { class: 'radios' }, MODES.map(([v, n]) => h('label', null, h('input', { type: 'radio', name: 'mode', checked: d.mode === v, onchange: () => { d.mode = v; } }), n))),
       h('label', { class: 'row', style: 'gap:6px;margin-top:10px;cursor:pointer' }, h('input', { type: 'checkbox', checked: !!d.teamBalance, onchange: (e) => { d.teamBalance = e.target.checked; } }), '모둠에 남녀 최대한 같은 비율로'),
       h('div', { class: 'muted', style: 'margin-top:4px;line-height:1.6' }, '체크하면 위의 짝 규칙을 기본으로 하되, 모든 모둠을 합쳐서 남녀 비율이 최대한 1:1에 가깝도록 맞춰요. (학급 전체 성비가 1:1이 아니면 그 비율에 맞춰요)')),
     h('div', { class: 'card' }, h('h3', null, '같은 짝·모둠 반복 방지'),
-      h('div', { class: 'row' }, h('span', null, '최근'), repIn, h('span', null, '번 동안 같은 짝·모둠이 되지 않게 (0 = 사용 안 함)'))),
+      h('div', { class: 'row' }, h('span', null, '최근'), repIn, h('span', null, '번 동안 같은 짝·모둠이 되지 않게 (0 = 사용 안 함)')))),
+    h('div', { class: 'card seat-teams' }, h('h3', null, '모둠 구성'),
+      d.teams.length ? d.teams.map((t, ti) => h('div', { class: 'list-item' },
+        h('span', { class: 'dot', style: `background:${TEAM_COLORS[ti % TEAM_COLORS.length]}` }),
+        h('input', { value: t.name, maxlength: 12, style: 'flex:1;min-width:0', oninput: (e) => { t.name = e.target.value; }, onchange: () => rerender() }),
+        h('span', { class: 'muted' }, `${t.cells.length}자리`),
+        h('button', { class: 'sm ghost', onclick: () => { d.teams.splice(ti, 1); rerender(); } }, '✕')))
+        : h('div', { class: 'muted' }, '왼쪽에서 "모둠 지정"을 고르고 여러 자리를 누른 뒤 "모둠 만들기"를 눌러 주세요.'))),
     h('div', { class: 'card' }, h('h3', null, '고정 자리 (학생에게는 보이지 않음)'),
       h('div', { class: 'row' }, fixSel, h('button', { class: 'sm', onclick: () => { ui.pick = Number(fixSel.value); rerender(); } }, '자리 고르기')),
       d.fixed.map((f, i) => h('div', { class: 'list-item' }, h('span', null, `${stuName(f.num)} → ${Math.floor(f.idx / d.cols) + 1}행 ${(f.idx % d.cols) + 1}열`),
@@ -823,14 +837,7 @@ function seatEditor() {
           d.avoid.push({ a: Number(avA.value), b: Number(avB.value), type: avType.value, n: Math.max(1, Number(avN.value) | 0) }); rerender();
         } }, '추가')),
       d.avoid.map((x, i) => h('div', { class: 'list-item' }, h('span', null, `${stuName(x.a)} ↔ ${stuName(x.b)} · ${x.type === 'group' ? '같은 짝·모둠 금지' : x.n + '칸 이내 금지'}`),
-        h('button', { class: 'sm ghost', onclick: () => { d.avoid.splice(i, 1); rerender(); } }, '✕')))),
-    h('div', { class: 'card' }, h('h3', null, '모둠 구성'),
-      d.teams.length ? d.teams.map((t, ti) => h('div', { class: 'list-item' },
-        h('span', { class: 'dot', style: `background:${TEAM_COLORS[ti % TEAM_COLORS.length]}` }),
-        h('input', { value: t.name, maxlength: 12, style: 'flex:1;min-width:0', oninput: (e) => { t.name = e.target.value; }, onchange: () => rerender() }),
-        h('span', { class: 'muted' }, `${t.cells.length}자리`),
-        h('button', { class: 'sm ghost', onclick: () => { d.teams.splice(ti, 1); rerender(); } }, '✕')))
-        : h('div', { class: 'muted' }, '왼쪽에서 "모둠 지정"을 고르고 여러 자리를 누른 뒤 "모둠 만들기"를 눌러 주세요.'))
+        h('button', { class: 'sm ghost', onclick: () => { d.avoid.splice(i, 1); rerender(); } }, '✕'))))
     );
 
   if (!S.roster.length) return h('div', { class: 'card placeholder' }, '먼저 "학생 명렬표"를 입력해 주세요.');
@@ -841,6 +848,7 @@ function seatEditor() {
    제출확인
    ===================================================== */
 let saveTimers = {};
+const subPer = () => { try { const v = Number(localStorage.getItem('sub_per')); return v >= 1 && v <= 4 ? v : 0; } catch (e) { return 0; } };
 function queueBoardSave(b) {
   S.saveText = '저장 중…'; updSave();
   clearTimeout(saveTimers[b.id]);
@@ -875,7 +883,14 @@ function pageSubmit() {
   } }, APP.lockIc(true), ' 전체 잠금/해제');
   const fsBtn = h('button', { onclick: () => { document.fullscreenElement ? document.exitFullscreen() : (wrap.requestFullscreen && wrap.requestFullscreen()); } }, '전체화면');
   const cfgBtn = h('button', { onclick: () => subSettings() }, '설정');
-  const bar = h('div', { class: 'sub-bar' }, addBtn, allLock, fsBtn, cfgBtn, saveState, h('span', { class: 'muted' }, '한 번 누르면 제출(회색), 두 번 빠르게 누르면 확인(연두색)'));
+  // 한 줄에 제출확인판 몇 개 (누를 때마다 1→2→3→4→3→2→1)
+  const perBtn = h('button', { class: 'has-ic per-btn', 'data-noic': '1', onclick: () => {
+    let v = subPer() || 2; if (v >= 4) S.perDir = -1; else if (v <= 1) S.perDir = 1; v += S.perDir || 1;
+    try { localStorage.setItem('sub_per', v); } catch (e) { /* 저장 안 됨 */ } drawPer(); layout();
+  } });
+  const drawPer = () => { const v = subPer(); perBtn.replaceChildren(APP.icon('grid4'), h('b', null, v ? String(v) : '자동')); perBtn.title = `한 줄에 제출확인판 ${v || '자동'}개 (누를 때마다 바뀌어요)`; };
+  drawPer();
+  const bar = h('div', { class: 'sub-bar' }, addBtn, allLock, fsBtn, cfgBtn, perBtn, saveState, h('span', { class: 'muted' }, '한 번 누르면 제출(회색), 두 번 빠르게 누르면 확인(연두색)'));
   const C = subCfg();
   const shownName = (st) => (C.mode === 'given' ? givenName(st) : st.name);
   if (C.num) area.classList.add('with-num');
@@ -899,12 +914,12 @@ function pageSubmit() {
     const title = h('input', { class: 'title', value: b.title, placeholder: '과제명', oninput: (ev) => { b.title = ev.target.value; queueBoardSave(b); if (APP.classBoard) APP.classBoard.refresh(); } });
     const lockBtn = h('button', { 'data-noic': '1', onclick: () => { b.locked = !b.locked; queueBoardSave(b); syncLock(e); } });
     const del = h('button', { class: 'sm ghost', title: '삭제', onclick: async () => {
-      if (!confirm(`"${b.title || '제목 없음'}" 제출판을 삭제할까요?`)) return;
+      if (!await uiConfirm(`"${b.title || '제목 없음'}" 제출판을 삭제할까요?`)) return;
       try { await api('deleteBoard', { id: b.id }); S.boards = S.boards.filter((x) => x.id !== b.id); entries.splice(entries.indexOf(e), 1); e.el.remove(); syncEmpty(); layout(); if (APP.classBoard) APP.classBoard.refresh(); }
       catch (x) { toast(errMsg(x), true); }
     } }, '✕');
-    const reset = h('button', { class: 'sm ghost', title: '제출 표시 모두 지우기', onclick: () => {
-      if (b.locked || !confirm('이 제출판의 제출 표시를 모두 지울까요?')) return;
+    const reset = h('button', { class: 'sm ghost', title: '제출 표시 모두 지우기', onclick: async () => {
+      if (b.locked || !await uiConfirm('이 제출판의 제출 표시를 모두 지울까요?')) return;
       doneSet.clear(); greenSet.clear(); b.doneAt = {}; grid.querySelectorAll('.scell').forEach((c) => { c.classList.remove('done', 'green'); const t = c.querySelector('.ts'); if (t) t.textContent = ''; }); commit();
     } }, '초기화');
     const grid = h('div', { class: 'sbd-grid', style: `grid-template-columns:repeat(${cols},var(--cw))` }, roster.map((st) => {
@@ -941,8 +956,11 @@ function pageSubmit() {
     const top = area.getBoundingClientRect().top;
     const H = Math.max(220, window.innerHeight - top - (document.fullscreenElement ? 14 : 52)), W = area.clientWidth, GAP = 12, HEAD = 46, PAD = 18, CG = 4;
     let best = null;
-    for (let r = 1; r <= cnt; r++) {
-      const c = Math.ceil(cnt / r), slotW = (W - (c - 1) * GAP) / c, slotH = (H - (r - 1) * GAP) / r;
+    const per = subPer();
+    const pc = per ? Math.min(per, cnt) : 0;   // 한 줄에 보여 줄 개수를 정했으면 그것만
+    for (let r = pc ? Math.ceil(cnt / pc) : 1; r <= (pc ? Math.ceil(cnt / pc) : cnt); r++) {
+      const c = pc || Math.ceil(cnt / r);
+      const slotW = (W - (c - 1) * GAP) / c, slotH = (H - (r - 1) * GAP) / r;
       const narrow = slotW < 400, hd = narrow ? 84 : HEAD;
       const sw = (slotW - PAD - (cols - 1) * CG) / cols, sh = (slotH - hd - PAD - (rows - 1) * CG) / rows;
       const cw = Math.min(sw, sh * 1.6), ch = Math.min(sh, cw);   // 이름이 가로로 길어서 칸을 약간 넓게
@@ -1008,7 +1026,7 @@ async function kvGet(keys) {
 const APP = window.APP = {
   S, h, $, api, toast, errMsg, clone, byNum, ERR, gcls, DEMO,
   pages: {}, onLock: [], onClear: [], clearPlan, subDisplayName: (st) => subDisplayName(st), byNum, queueBoardSave: (b) => queueBoardSave(b),
-  renderPage: () => renderPage(), pageTool: (el) => pageTool(el),
+  renderPage: () => renderPage(), pageTool: (el) => pageTool(el), takeWidthBtn: () => takeWidthBtn(),
   kvGet, kvSet: (key, obj) => api('kvSet', { key, value: JSON.stringify(obj) }),
   kvList: async (prefix) => (await api('kvList', { prefix })).keys,
   kvDel: (key) => api('kvDel', { key }),

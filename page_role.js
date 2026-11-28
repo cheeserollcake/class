@@ -319,8 +319,8 @@ function view(redraw) {
     h('div', { class: 'row gap' },
       h('button', { class: 'primary', onclick: () => fileIn.click() }, '+ 새 양식 올리기 (PDF·사진)'), fileIn, formSel,
       h('button', { onclick: exportRoles }, '내보내기'),
-      RO.form && !RO.form.draft && RO.form.name ? h('button', { class: 'sm ghost', onclick: () => {
-        if (!confirm(`양식 "${RO.form.name}"을(를) 삭제할까요? (이 양식으로 저장한 역할표는 남아 있어요)`)) return;
+      RO.form && !RO.form.draft && RO.form.name ? h('button', { class: 'sm ghost', onclick: async () => {
+        if (!await uiConfirm(`양식 "${RO.form.name}"을(를) 삭제할까요? (이 양식으로 저장한 역할표는 남아 있어요)`)) return;
         guard('삭제 중…', async () => { await APP.api('delFile', { fileId: RO.form.fileId }).catch(() => {}); await APP.kvDel(fkey(RO.form.name)); RO.form = null; RO.pages = null; await loadLists(); });
       } }, '양식 삭제') : null),
     h('div', { class: 'muted' }, 'PDF나 사진을 올리면 표의 빈 칸을 자동으로 찾아요. 칸 위치는 직접 고칠 수 있고, 한 번 저장하면 다음부터는 양식을 골라 바로 쓸 수 있어요.'));
@@ -367,7 +367,7 @@ function view(redraw) {
     h('div', { class: 'muted', style: 'margin-bottom:8px' }, '색 칸을 끌어서 옮기고, 오른쪽 아래 모서리를 끌어서 크기를 바꾸세요. 칸을 누르면 종류를 고를 수 있어요. 고른 칸은 Delete나 Backspace 키로 지울 수 있어요.'),
     h('div', { class: 'row gap' }, h('button', { class: 'sm', onclick: () => {
       const id = 'f' + Date.now().toString(36); RO.form.fields.push({ id, page: selF ? selF.page : 0, x: 0.3, y: 0.3, w: 0.3, h: 0.035, kind: 'none', row: 0 }); RO.sel = id; redraw();
-    } }, '+ 칸 추가'), h('button', { class: 'sm ghost', onclick: () => { if (!confirm('자동 검출을 다시 하면 지금까지 고친 내용이 사라져요. 계속할까요?')) return; RO.form.fields = detectAll(RO.pages); RO.sel = null; redraw(); } }, '자동 검출 다시')),
+    } }, '+ 칸 추가'), h('button', { class: 'sm ghost', onclick: async () => { if (!await uiConfirm('자동 검출을 다시 하면 지금까지 고친 내용이 사라져요. 계속할까요?')) return; RO.form.fields = detectAll(RO.pages); RO.sel = null; redraw(); } }, '자동 검출 다시')),
     selF ? h('div', { style: 'margin-top:10px' },
       h('div', { class: 'field' }, h('label', null, '종류'), h('select', { value: selF.kind, onchange: (e) => { selF.kind = e.target.value; if (selF.kind !== 'none' && !selF.row) selF.row = 1; redraw(); } }, KINDS.map(([v, n]) => h('option', { value: v }, n)))),
       selF.kind !== 'none' ? h('div', { class: 'field' }, h('label', null, '몇 번째 줄 역할'), h('input', { type: 'number', min: 1, max: 60, class: 'n', value: selF.row, onchange: (e) => { selF.row = Math.max(1, Number(e.target.value) | 0); redraw(); } })) : null,
@@ -377,7 +377,7 @@ function view(redraw) {
     h('div', { class: 'row', style: 'margin-top:14px;justify-content:flex-end' }, h('button', { onclick: () => { RO.mode = 'fill'; redraw(); } }, '채우기 화면으로'),
       h('button', { class: 'primary', onclick: async () => {
         let name = RO.form.name;
-        if (!name) { name = await askName('양식 이름', RO.pending ? RO.pending.name : '역할 양식'); if (!name) return; name = safeName(name); if (RO.forms.includes(name) && !confirm(`"${name}" 양식이 이미 있어요. 덮어쓸까요?`)) return; }
+        if (!name) { name = await askName('양식 이름', RO.pending ? RO.pending.name : '역할 양식'); if (!name) return; name = safeName(name); if (RO.forms.includes(name) && !await uiConfirm(`"${name}" 양식이 이미 있어요. 덮어쓸까요?`)) return; }
         guard('양식을 저장하는 중…', async () => {
           if (RO.pending) { const u = await APP.api('uploadFile', { name: name + (/pdf/i.test(RO.pending.mime) ? '.pdf' : '.png'), mime: RO.pending.mime, data: RO.pending.b64 }); RO.form.fileId = u.fileId; RO.pending = null; }
           RO.form.name = name; await APP.kvSet(fkey(name), recordOf(RO.form));
@@ -406,14 +406,14 @@ function view(redraw) {
       h('b', null, '역할 입력'), fontSel,
       isAuto() ? null : h('label', { class: 'row', style: 'gap:4px;cursor:pointer' }, h('input', { type: 'checkbox', checked: !!RO.form.bold, onchange: (e) => { RO.form.bold = e.target.checked; changeFont(); } }), '굵게'),
       rows ? h('span', { class: 'muted' }, `입력 칸 ${rows}줄`) : h('span', { class: 'banner warn', style: 'margin:0' }, '역할 칸이 없어요. "입력 칸 수정"에서 칸의 종류를 정해 주세요.'),
-      h('button', { class: 'sm ghost', onclick: () => { if (!confirm('입력한 내용을 모두 지울까요?')) return; RO.roles = [{ name: '', desc: '', owner: '' }]; RO.setName = ''; redraw(); } }, '내용 모두 지우기'),
+      h('button', { class: 'sm ghost', onclick: async () => { if (!await uiConfirm('입력한 내용을 모두 지울까요?')) return; RO.roles = [{ name: '', desc: '', owner: '' }]; RO.setName = ''; redraw(); } }, '내용 모두 지우기'),
       h('button', { class: 'sm ghost', onclick: () => { RO.mode = 'edit'; redraw(); } }, '입력 칸 수정'),
       h('div', { style: 'flex:1' }),
       setSel,
       h('button', { class: 'primary', onclick: async () => {
         const m = new Date().getMonth() + 1; const name = await askName('역할표 이름 (같은 이름이면 덮어써요)', RO.setName || `${m}월`); if (!name) return;
         if (!/^[\w:.\- 가-힣]{1,60}$/.test(name)) return toast('이름에는 글자·숫자·공백·-·. 만 쓸 수 있어요', true);
-        if (RO.sets.includes(name) && name !== RO.setName && !confirm(`"${name}"이(가) 이미 있어요. 덮어쓸까요?`)) return;
+        if (RO.sets.includes(name) && name !== RO.setName && !await uiConfirm(`"${name}"이(가) 이미 있어요. 덮어쓸까요?`)) return;
         guard('저장하는 중…', async () => { await APP.kvSet(skey(name), { name, form: RO.form.name, roles: RO.roles, savedAt: Date.now() }); RO.setName = name; await loadLists(); toast(`"${name}"으로 저장했습니다`); });
       } }, '역할표 저장'),
       h('button', { onclick: () => exportPng() }, 'PNG로 저장'), h('button', { onclick: () => window.print() }, '인쇄 / PDF로 저장')),

@@ -347,7 +347,7 @@ function logItem(l, kw, redraw, editable) {
         editable ? [
           h('button', { class: 'sm ghost', onclick: () => { ST.editId = l.id; ST.text = l.content; ST.date = l.date; ST.tone = l.tone || ''; ST.pairEdit = { ...(l.pairs || {}) }; ST.sub = 'input'; redraw(); window.scrollTo(0, 0); } }, '수정'),
           h('button', { class: 'sm ghost', onclick: async () => {
-            if (!confirm('이 기록을 삭제할까요?')) return;
+            if (!await uiConfirm('이 기록을 삭제할까요?')) return;
             try { await api('logDel', { id: l.id }); ST.logs = ST.logs.filter((x) => x.id !== l.id); redraw(); } catch (e) { toast(errMsg(e), true); }
           } }, '삭제')] : null)),
     h('div', { class: 'log-text' }, highlighted(l.content, l._spans || [], kw)),
@@ -415,8 +415,8 @@ function viewSurvey(redraw) {
   autoSync(redraw);
   const sv = ST.survey, roster = APP.roster(), rounds = sv.main.rounds;
   const box = h('div', { class: 'card' });
-  const addRound = () => {
-    const name = prompt('조사 이름을 입력하세요', `${rounds.length + 1}차 교우관계 조사`);
+  const addRound = async () => {
+    const name = await uiPrompt('조사 이름을 입력하세요', `${rounds.length + 1}차 교우관계 조사`);
     if (!name) return;
     const r = { id: 'r' + Date.now().toString(36), name: name.trim().slice(0, 30), date: APP.today() };
     rounds.push(r); sv.data[r.id] = {}; ST.svRound = r.id; ST.rater = roster[0] && roster[0].num;
@@ -440,11 +440,11 @@ function viewSurvey(redraw) {
   const head = h('div', { class: 'row', style: 'gap:8px;flex-wrap:wrap' },
     h('b', null, '조사'), roundSel,
     h('input', { type: 'date', value: round.date || '', title: '조사한 날짜', onchange: (e) => { round.date = e.target.value; saveSurveyLater(); } }),
-    h('button', { class: 'sm', onclick: () => { const n = prompt('조사 이름', round.name); if (n) { round.name = n.trim().slice(0, 30); saveSurveyLater(); redraw(); } } }, '이름 바꾸기'),
+    h('button', { class: 'sm', onclick: async () => { const n = await uiPrompt('조사 이름', round.name); if (n) { round.name = n.trim().slice(0, 30); saveSurveyLater(); redraw(); } } }, '이름 바꾸기'),
     h('button', { class: 'sm', onclick: addRound }, '+ 새 조사'),
     h('button', { class: 'sm primary', onclick: () => formPanel(round, redraw) }, round.form ? `📱 QR 응답 (${round.form.count || 0}명)` : '📱 QR로 학생 응답 받기'),
     h('button', { class: 'sm ghost', onclick: async () => {
-      if (!confirm(`"${round.name}" 조사를 삭제할까요? 입력한 평가가 모두 지워져요.`)) return;
+      if (!await uiConfirm(`"${round.name}" 조사를 삭제할까요? 입력한 평가가 모두 지워져요.`)) return;
       sv.main.rounds = rounds.filter((r) => r.id !== round.id); delete sv.data[round.id];
       delete sv.nom[round.id];
       try { await APP.kvSet('survey:main', sv.main); await APP.kvDel('survey:r:' + round.id); await APP.kvDel('survey:n:' + round.id); } catch (e) { toast(errMsg(e), true); }
@@ -489,9 +489,9 @@ function viewSurvey(redraw) {
     h('div', { class: 'muted', style: 'margin:10px 0;line-height:1.7' }, '평가한 학생을 고른 뒤, 친구마다 4단계 중 하나를 누르세요. 키보드 숫자(1 싫음 · 2 그저 그럼 · 3 친해지고 싶음 · 4 좋음)로 입력하면 다음 친구로 넘어가요. (↑↓ 이동, 같은 칸을 다시 누르면 지워져요) 자동 저장돼요.'),
     nav,
     h('div', { class: 'row', style: 'justify-content:space-between;margin:10px 0 6px' }, h('b', null, `${me.num}번 ${me.name} 학생의 평가`), cnt,
-      h('button', { class: 'sm danger', onclick: () => {
+      h('button', { class: 'sm danger', onclick: async () => {
         if (!done(me.num)) return toast(`${me.name} 학생은 아직 입력한 기록이 없어요`);
-        if (!confirm(`${me.name} 학생이 친구들을 평가한 기록 ${done(me.num)}개를 모두 지울까요?`)) return;
+        if (!await uiConfirm(`${me.name} 학생이 친구들을 평가한 기록 ${done(me.num)}개를 모두 지울까요?`)) return;
         delete data[me.num]; saveSurveyLater(round.id); toast(`${me.name} 학생의 기록을 지웠어요`); redraw();
       } }, '이 학생 기록 삭제')),
     h('div', { class: 'sv-list' }, rowsEl));
@@ -536,9 +536,9 @@ function nomInput(round, roster, me, idx, go, redraw) {
     h('div', { class: 'row sv-nav' }, h('button', { class: 'sm', onclick: () => go(-1) }, '◀ 이전 학생'), raterSel, h('button', { class: 'sm', onclick: () => go(1) }, '다음 학생 ▶'),
       h('span', { class: 'muted nm-filled' }, `입력한 학생 ${filled}/${roster.length}명`)),
     h('div', { class: 'row', style: 'justify-content:space-between;margin:10px 0 6px' }, h('b', null, `${me.num}번 ${me.name} 학생의 지명`),
-      h('button', { class: 'sm danger', onclick: () => {
+      h('button', { class: 'sm danger', onclick: async () => {
         if (!doneN(me.num)) return toast(`${me.name} 학생은 아직 입력한 지명이 없어요`);
-        if (!confirm(`${me.name} 학생의 지명 기록을 모두 지울까요?`)) return;
+        if (!await uiConfirm(`${me.name} 학생의 지명 기록을 모두 지울까요?`)) return;
         delete ST.survey.nom[round.id][me.num]; saveSurveyLater(round.id); redraw();
       } }, '이 학생 지명 삭제')),
     NOM_CTX.map(([c, n, d]) => h('div', { class: 'nm-sec' }, h('div', { class: 'nm-st' }, h('b', null, n), h('span', { class: 'muted' }, ' · ' + d)),
@@ -716,11 +716,11 @@ function formPanel(round, redraw) {
           h('div', { class: 'row', style: 'gap:6px;flex-wrap:wrap;margin-top:12px' },
             h('button', { class: 'sm', onclick: async () => {
               const want = !F2.closed;
-              if (want && !confirm('응답을 마감할까요? 학생들이 더 이상 응답할 수 없어요.')) return;
+              if (want && !await uiConfirm('응답을 마감할까요? 학생들이 더 이상 응답할 수 없어요.')) return;
               try { await api('formClose', { id: F2.id, open: !want }); if (want) { try { await formSync(round, true); } catch (e2) { /* 무시 */ } } F2.closed = want; saveSurveyLater(round.id); draw(); toast(want ? '응답을 마감했어요' : '다시 응답을 받아요'); } catch (er) { toast(errMsg(er), true); }
             } }, F2.closed ? '다시 응답 받기' : '응답 마감'),
             h('a', { class: 'sm-link', href: `https://docs.google.com/forms/d/${F2.id}/edit`, target: '_blank', rel: 'noopener' }, '구글 설문지에서 열기'),
-            h('button', { class: 'sm ghost', onclick: () => { if (!confirm('이 조사와 설문지의 연결을 끊을까요? (이미 들어온 응답은 그대로 남아요. 새 설문지를 다시 만들 수 있어요)')) return; delete round.form; saveSurveyLater(round.id); draw(); } }, '연결 끊기')))),
+            h('button', { class: 'sm ghost', onclick: async () => { if (!await uiConfirm('이 조사와 설문지의 연결을 끊을까요? (이미 들어온 응답은 그대로 남아요. 새 설문지를 다시 만들 수 있어요)')) return; delete round.form; saveSurveyLater(round.id); draw(); } }, '연결 끊기')))),
       h('div', { class: 'muted', style: 'margin-top:10px;line-height:1.6' }, '같은 학생이 여러 번 응답하면 마지막 응답만 반영돼요. 학생이 응답한 뒤 선생님이 직접 고친 내용은, 그 학생이 다시 응답하지 않는 한 그대로 남아요.'));
   };
   draw(); document.body.append(ov);
