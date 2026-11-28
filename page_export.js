@@ -248,11 +248,13 @@ function openExport(opt) {
   }));
   const fmts = [['sheet', '구글 스프레드시트'], ['image', '이미지 (PNG)'], ['xlsx', '엑셀 파일 (.xlsx)']];
   const status = h('div', { class: 'muted', style: 'min-height:20px;margin-top:8px' });
-  const goBtn = h('button', { class: 'primary', onclick: run }, '내보내기');
+  const FK = { sheet: 'gsheet', image: 'png', xlsx: 'xlsx' }, FN = { sheet: '구글 스프레드시트로 내보내기', image: '그림(PNG)으로 내보내기', xlsx: '엑셀 파일로 내보내기' };
+  const goBtn = h('button', { class: 'primary has-ic ic-only', 'data-noic': '1', onclick: run });
+  const setGo = () => { goBtn.replaceChildren(APP.icon(FK[state.fmt] || 'download')); goBtn.title = FN[state.fmt] || '내보내기'; goBtn.setAttribute('aria-label', goBtn.title); };
   const cancel = h('button', { onclick: () => close() }, '닫기');
   const box = h('div', { class: 'modal xdlg' },
     h('h3', null, opt.title || '내보내기'),
-    h('div', { class: 'radios', style: 'margin:10px 0' }, fmts.map(([v, n]) => h('label', null, h('input', { type: 'radio', name: 'xfmt', checked: state.fmt === v, onchange: () => { state.fmt = v; hint(); } }), n))),
+    h('div', { class: 'radios', style: 'margin:10px 0' }, fmts.map(([v, n]) => h('label', { class: 'fmt-opt' }, h('input', { type: 'radio', name: 'xfmt', checked: state.fmt === v, onchange: () => { state.fmt = v; hint(); setGo(); } }), APP.icon(FK[v]), n))),
     h('div', { class: 'muted', id: 'xhint', style: 'min-height:20px;margin-bottom:8px' }),
     h('label', { class: 'xrow xall' }, allBox, h('b', null, '전체 선택')), list, status,
     h('div', { class: 'row', style: 'margin-top:14px' }, cancel, goBtn));
@@ -288,7 +290,7 @@ function openExport(opt) {
     } catch (e) { status.textContent = ''; toast(errMsg(e), true); }
     goBtn.disabled = false; cancel.disabled = false;
   }
-  document.body.append(ov); hint();
+  document.body.append(ov); hint(); setGo();
 }
 
 APP.xl = { readTableFile, buildXlsx, saveBlob, parseCsv, zipStore };

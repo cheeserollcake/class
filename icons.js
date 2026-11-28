@@ -13,7 +13,12 @@ const SVG = {
   cloud: `<svg viewBox="0 0 24 24" ${LINE} stroke-width="2"><path d="M7.5 18.5H7a4.5 4.5 0 0 1-.6-8.96A6 6 0 0 1 17.8 8.6 4.5 4.5 0 0 1 17 18.5h-.5"/><path d="M12 20.5V12M9 14.5l3-3 3 3"/></svg>`
 };
 const FMT = { hwp: ['HWP', '#1f6fd1'], docx: ['DOC', '#2b579a'], xlsx: ['XLS', '#1d6f42'], gsheet: ['SHT', '#0f9d58'], pdf: ['PDF', '#e0362c'], png: ['PNG', '#8e44ad'], csv: ['CSV', '#5f6b7a'] };
-const fmtSvg = (k) => { const [t, c] = FMT[k]; return `<svg viewBox="0 0 24 24"><path d="M6 2.8h8.2L19 7.6V20a1.2 1.2 0 0 1-1.2 1.2H6A1.2 1.2 0 0 1 4.8 20V4A1.2 1.2 0 0 1 6 2.8z" fill="#fff" stroke="currentColor" stroke-width="1.4"/><path d="M14 2.8v4.8h5" fill="none" stroke="currentColor" stroke-width="1.4"/><rect x="1.5" y="11.2" width="17" height="7.6" rx="1.6" fill="${c}"/><text x="10" y="17.1" font-size="6.2" font-weight="800" font-family="Arial,sans-serif" text-anchor="middle" fill="#fff">${t}</text></svg>`; };
+const BRAND = {
+  xlsx: `<svg viewBox="0 0 24 24"><rect x="7" y="3" width="15" height="18" rx="2" fill="#21a366"/><path d="M14.5 3v18M7 9h15M7 15h15" stroke="#fff" stroke-opacity=".45" stroke-width="1"/><rect x="2" y="6" width="12" height="12" rx="2" fill="#107c41"/><path d="M5.3 9.2l5.4 5.6M10.7 9.2l-5.4 5.6" stroke="#fff" stroke-width="2" stroke-linecap="round"/></svg>`,
+  gsheet: `<svg viewBox="0 0 24 24"><path d="M6.2 2h8.6L20 7.2V20.6c0 .8-.6 1.4-1.4 1.4H6.2c-.8 0-1.4-.6-1.4-1.4V3.4C4.8 2.6 5.4 2 6.2 2z" fill="#0f9d58"/><path d="M14.8 2v5.2H20z" fill="#87ceac"/><rect x="8" y="10.5" width="9" height="7.5" rx=".6" fill="#fff"/><path d="M8 14.2h9M12.1 10.5v7.5" stroke="#0f9d58" stroke-width="1.3"/></svg>`,
+  docx: `<svg viewBox="0 0 24 24"><rect x="7" y="3" width="15" height="18" rx="2" fill="#41a5ee"/><path d="M10 8h9M10 12h9M10 16h9" stroke="#fff" stroke-opacity=".6" stroke-width="1.2"/><rect x="2" y="6" width="12" height="12" rx="2" fill="#185abd"/><path d="M4.6 9.3l1.4 5.4 2-4.2 2 4.2 1.4-5.4" fill="none" stroke="#fff" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/></svg>`
+};
+const fmtSvg = (k) => { if (BRAND[k]) return BRAND[k]; const [t, c] = FMT[k]; return `<svg viewBox="0 0 24 24"><path d="M6 2.8h8.2L19 7.6V20a1.2 1.2 0 0 1-1.2 1.2H6A1.2 1.2 0 0 1 4.8 20V4A1.2 1.2 0 0 1 6 2.8z" fill="#fff" stroke="currentColor" stroke-width="1.4"/><path d="M14 2.8v4.8h5" fill="none" stroke="currentColor" stroke-width="1.4"/><rect x="1.5" y="11.2" width="17" height="7.6" rx="1.6" fill="${c}"/><text x="10" y="17.1" font-size="6.2" font-weight="800" font-family="Arial,sans-serif" text-anchor="middle" fill="#fff">${t}</text></svg>`; };
 function icon(k) {
   const s = document.createElement('span'); s.className = 'ic ic-' + k; s.setAttribute('aria-hidden', 'true');
   s.innerHTML = SVG[k] || (FMT[k] ? fmtSvg(k) : '');
@@ -24,6 +29,7 @@ window.APP.icon = icon;
 
 const EMOJI = /^[\s⚙🗄📄📥📤💾⬇⬆📁🗂️️]+/u;
 function pick(t) {
+  if (/스프레드시트.*(양식|내보내기|만들기)|^(구글 )?스프레드시트$/.test(t)) return 'gsheet';
   if (/양식.*(받기|내려)|업로드 양식|양식 받기|템플릿|양식 만들기/.test(t)) return 'template';
   if (/업로드|올리기/.test(t) || (/불러오기/.test(t) && /PDF|엑셀|파일/i.test(t))) return 'upload';
   const fmtish = /\.(hwpx?|docx|xlsx|pdf|png|csv)\b|\((PNG|PDF|HWP|XLSX)\)|^(구글 )?스프레드시트$|내보내기|내려받기|다운로드|저장|파일/i.test(t);
@@ -37,6 +43,7 @@ function pick(t) {
     if (/png|이미지|그림/i.test(t)) return 'png';
   }
   if (/내보내기|내려받기|다운로드|백업/.test(t)) return 'download';
+  if (/^기록하기$|^이미지 고르기$/.test(t)) return t === '기록하기' ? 'cloud' : 'upload';
   if (/저장|보관/.test(t) && !/삭제|저장된|저장한|안 됨|중…|됨$|했/.test(t)) return 'cloud';
   if (/설정( 수정)?$/.test(t) && !/가져오기|기초설정/.test(t)) return 'gear';
   return null;
@@ -45,13 +52,11 @@ const SKIP = '.tab, .nav-btn, .chip, .cz-seg button, .tw-seg button, .lv, .cell,
 function deco(b) {
   if (b.dataset.ic || b.matches(SKIP)) return;
   const t = (b.textContent || '').replace(EMOJI, '').trim();
-  if (!t || t.length > 24) return;
-  const k = pick(t); if (!k) return;
-  b.dataset.ic = k;
-  // 앞에 붙은 이모지 아이콘은 떼어 내기
-  const first = [...b.childNodes].find((n) => n.nodeType === 3 && n.nodeValue.trim());
-  if (first && EMOJI.test(first.nodeValue)) first.nodeValue = first.nodeValue.replace(EMOJI, '');
-  b.prepend(icon(k)); b.classList.add('has-ic');
+  if (!t || t.length > 30) { if (b.dataset.ick && !b.querySelector(':scope > .ic')) { b.dataset.ic = b.dataset.ick; b.prepend(icon(b.dataset.ick)); } return; }
+  const k = pick(t) || b.dataset.ick; if (!k) return;   // 글자가 '저장 중…'처럼 바뀌어도 처음 아이콘 유지
+  b.dataset.ic = k; b.dataset.ick = k;
+  b.title = t; b.setAttribute('aria-label', t);   // 글자는 숨기고, 마우스를 올리면 설명이 떠요
+  b.prepend(icon(k)); b.classList.add('has-ic', 'ic-only');
 }
 function scan(root) { if (root.nodeType !== 1) return; if (root.tagName === 'BUTTON') deco(root); root.querySelectorAll && root.querySelectorAll('button').forEach(deco); }
 function start() {
@@ -60,9 +65,13 @@ function start() {
     m.addedNodes.forEach(scan);
     if (m.type === 'childList' && m.target.nodeType === 1) {   // 버튼 글자를 통째로 바꾸면 아이콘이 지워지므로 다시 붙이기
       const b = m.target.closest('button');
-      if (b && b.dataset.ic && !b.querySelector(':scope > .ic')) { delete b.dataset.ic; deco(b); }
+      if (b && b.dataset.ick && !b.querySelector(':scope > .ic')) { delete b.dataset.ic; deco(b); }
     }
-    if (m.type === 'characterData' && m.target.parentElement) { const b = m.target.parentElement.closest('button'); if (b && !b.dataset.ic) deco(b); }
+    if (m.type === 'characterData' && m.target.parentElement) {
+      const b = m.target.parentElement.closest('button');
+      if (b && !b.dataset.ic) deco(b);
+      else if (b && b.classList.contains('ic-only')) { const t = (b.textContent || '').replace(EMOJI, '').trim(); if (t) { b.title = t; b.setAttribute('aria-label', t); } }
+    }
   })).observe(document.body, { childList: true, subtree: true, characterData: true });
 }
 if (document.body) start(); else document.addEventListener('DOMContentLoaded', start);

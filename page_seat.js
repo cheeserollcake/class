@@ -263,7 +263,6 @@ function view(redraw) {
   return h('div', null,
     h('div', { class: 'card' },
       h('div', { class: 'row gap' }, shuffleBtn, skipBtn, saveBtn, loadSel, delBtn, exportBtn, sound)),
-    asg && SE.cur && SE.cur.notes && SE.cur.notes.length ? h('div', { class: 'banner warn' }, SE.cur.notes.join(' / ')) : null,
     h('div', { class: 'card' },
       banner,
       h('div', { class: 'board-front' }, '칠 판'),

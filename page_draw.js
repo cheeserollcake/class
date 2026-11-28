@@ -245,7 +245,7 @@ function viewPick(redraw) {
   const n = Math.max(1, Math.min(P.n, pool.length));
   if (P.go) { P.go = false; if (pool.length) return pickRun(redraw, go, reset); }
   const btn = h('button', { class: 'primary', disabled: !pool.length, onclick: go }, pool.length ? (P.last ? '다음 뽑기' : '뽑기') : '남은 학생 없음');
-  const info = [`${n}명 · ${gName}`, D.absent.size ? `결석 ${D.absent.size}명` : null, P.noRepeat ? `남은 학생 ${pool.length}명` : null];
+  const info = [];
   const rst = P.noRepeat ? h('button', { onclick: reset, title: '이미 뽑힌 학생 이력을 지워요' }, '초기화') : null;
   const stage = h('div', { class: 'draw-stage' });
   if (P.last && P.last.length) {
@@ -301,7 +301,7 @@ function pickRun(redraw, go, reset) {
     }
     grid.style.setProperty('--fs', Math.max(14, Math.floor(f)) + 'px');
   };
-  stage.append(stageHead(title, [`${n}명 · ${gName}`, D.absent.size ? `결석 ${D.absent.size}명` : null, P.noRepeat ? `남은 학생 ${remain}명` : null],
+  stage.append(stageHead(title, [],
     [again, P.noRepeat ? h('button', { onclick: reset, title: '이미 뽑힌 학생 이력을 지워요' }, '초기화') : null]), grid);
   // 애니메이션
   (async () => {
@@ -386,7 +386,7 @@ function viewTeam(redraw) {
   const go = () => { actx(); Tm.go = true; redraw(); };
   if (Tm.go) { Tm.go = false; if (N >= 2) return teamRun(redraw, go); }
   const mname = { none: '성별 고려 안 함', equal: '성비 동등하게', sep: '남녀 따로' }[Tm.mode];
-  const info = [`${Tm.n}팀 · ${mname}`, D.absent.size ? `결석 ${D.absent.size}명` : null];
+  const info = [];
   const stage = h('div', { class: 'draw-stage team' });
   if (Tm.last) { stage.append(stageHead(h('div', { class: 'draw-title' }, '지난 결과'), info, [h('button', { class: 'primary', disabled: N < 2, onclick: go }, '다시 구성')])); const g = teamGrid(Tm.last.teams, true); stage.append(g.grid); layoutTeams(stage, g.grid, Tm.last.teams, null); }
   else stage.append(stageHead(h('div', { class: 'draw-title' }, ''), info, []), h('div', { class: 'draw-ready' }, N >= 2 ? h('button', { class: 'primary big', onclick: go }, '팀 구성 시작') : h('div', { class: 'muted' }, '학생이 2명 이상 있어야 해요.')));
@@ -433,7 +433,7 @@ function teamRun(redraw, go) {
   const again = h('button', { class: 'primary', disabled: true, onclick: go }, '다시 구성');
   const note = h('div');
   const mname = { none: '성별 고려 안 함', equal: '성비 동등하게', sep: '남녀 따로' }[Tm.mode];
-  stage.append(stageHead(title, [`${Tm.n}팀 · ${mname}`, D.absent.size ? `결석 ${D.absent.size}명` : null], [again]), grid, note);
+  stage.append(stageHead(title, [], [again]), grid, note);
   layoutTeams(stage, grid, res.teams, note);
   (async () => {
     await wait(30); relayout();
@@ -445,10 +445,6 @@ function teamRun(redraw, go) {
         cells.forEach(({ el, s }) => { el.textContent = s.name; el.className = 'mem ' + gcls(s.gender); el.title = `${s.num}번`; });
         grid.querySelectorAll('.team-card').forEach((c) => c.classList.replace('spin', 'landed'));
         title.textContent = '🎉 팀 완성! 🎉'; stage.classList.add('done'); SND.fanfare(); confetti(); again.disabled = false;
-        const msgs = [];
-        if (res.note) msgs.push(res.note);
-        if (res.broken.length) msgs.push(`기피 설정을 모두 지킬 수 없어 일부를 무시했어요: ${res.broken.map(([a, b]) => `${nm(a)}↔${nm(b)}`).join(', ')}`);
-        if (msgs.length) { note.replaceChildren(h('div', { class: 'banner warn', style: 'margin:12px 0 0' }, msgs.join(' '))); relayout(); }
         return;
       }
       cells.forEach(({ el }) => { el.textContent = pickOne(all).name; });
@@ -516,9 +512,7 @@ function viewMani(redraw) {
   if (D.step.mani === 'run' && M.res) return maniRun(redraw);
   const hist = D.hist.slice().sort((a, b) => b.created - a.created);
   return h('div', null, h('div', { class: 'card draw-cfg' },
-    h('div', { class: 'row draw-bar' }, h('b', null, '마니또 · ' + (M.mode === 'mix' ? '성별 무시' : '성별 따로')), D.cfg.maniAvoid.length ? h('span', { class: 'muted' }, `기피 ${D.cfg.maniAvoid.length}쌍`) : null),
-    h('div', { class: 'muted', style: 'margin-top:8px' }, hist.length ? `저장된 마니또 ${hist.length}회를 보고, 예전과 같은 마니또가 최대한 나오지 않게 뽑아요.` : '마니또를 저장해 두면, 다음에 뽑을 때 같은 마니또가 최대한 나오지 않게 해요.'),
-    h('div', { class: 'row', style: 'justify-content:flex-end;margin-top:14px' },
+    h('div', { class: 'row', style: 'justify-content:center;padding:18px 0' },
       h('button', { class: 'primary big', onclick: () => {
         const r = makeManito(M.mode, D.cfg.maniAvoid, D.hist);
         M.res = { ...r, seen: [], name: '', id: null, mode: M.mode }; D.step.mani = 'run'; redraw();
@@ -599,7 +593,7 @@ function maniRun(redraw) {
     seen.add(s.num); R.seen = [...seen]; card.classList.add('seen');
   }
   return h('div', null, h('div', { class: 'card' }, bar,
-    msgs.length ? h('div', { class: 'banner warn', style: 'margin:10px 0 0' }, msgs.join(' ')) : null,
+
     h('div', { class: 'muted', style: 'margin-top:8px' }, '이름을 누르면 그 학생의 마니또가 나와요. 한 번 본 이름은 회색으로 바뀌어요.')),
   grid);
 }

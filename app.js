@@ -598,28 +598,6 @@ function rosterEditor() {
     } catch (e) { toast(errMsg(e), true); saveBtn.disabled = false; }
   } }, '저장');
 
-  const pasteBox = h('textarea', { class: 'paste', placeholder: '엑셀·한글 표를 복사해 붙여넣으세요.\n열 순서: 번호, 이름, 성별(남/여), 연락처, 생년월일, 특기사항, 호칭, 비고1, 비고2, 비고3' });
-  const paste = h('div', { class: 'card', hidden: !S.showPaste },
-    h('h3', null, '표 붙여넣기로 일괄 입력'),
-    h('div', { class: 'muted' }, '적용하면 현재 표의 내용이 붙여넣은 내용으로 바뀝니다. (저장 버튼을 눌러야 확정)'),
-    pasteBox,
-    h('div', { class: 'row' }, h('button', { class: 'primary sm', onclick: () => {
-      const keys = ORDER_KEYS;
-      const lines = pasteBox.value.split(/\r?\n/).filter((l) => l.trim());
-      const parsed = [];
-      lines.forEach((l, idx) => {
-        const c = l.split('\t');
-        if (idx === 0 && isNaN(Number(c[0]))) return; // 머리글 줄 건너뜀
-        const r = blankRow(parsed.length + 1);
-        keys.forEach((k, j) => { if (c[j] !== undefined) r[k] = c[j].trim(); });
-        if (!Number(r.num)) r.num = parsed.length + 1;
-        r.gender = normGender(r.gender); if (!r.surname) r.surname = autoSurname(r.name);
-        parsed.push(r);
-      });
-      if (!parsed.length) return toast('붙여넣은 내용이 없습니다', true);
-      S.rosterDraft = parsed; S.rosterDirty = true; S.showPaste = false; renderPage();
-    } }, '적용'), h('button', { class: 'sm', onclick: () => { S.showPaste = false; renderPage(); } }, '닫기')));
-
   /* 엑셀·CSV 파일로 일괄 등록 */
   const upMsg = h('div', { class: 'muted', style: 'margin-top:8px;line-height:1.7' });
   const upFile = h('input', { type: 'file', accept: '.xlsx,.csv,.tsv,.txt', hidden: true, onchange: async (e) => {
@@ -646,12 +624,15 @@ function rosterEditor() {
       h('div', { class: 'row', style: 'margin-top:12px' }, h('button', { onclick: close }, '취소'), h('button', { class: 'primary', onclick: () => {
         if (mode.v === 'replace') S.rosterDraft = list;
         else { const m = new Map(S.rosterDraft.map((r) => [Number(r.num), r])); list.forEach((r) => m.set(Number(r.num), r)); S.rosterDraft = [...m.values()].sort((a, b) => Number(a.num) - Number(b.num)); }
-        S.rosterDirty = true; S.showUpload = false; close(); renderPage(); toast(`${list.length}명을 적용했어요. 저장을 눌러 확정하세요`);
+        S.rosterDirty = true; closeUp(); close(); renderPage(); toast(`${list.length}명을 적용했어요. 저장을 눌러 확정하세요`);
       } }, '적용'))));
     document.body.append(ov);
   };
   const tplRows = () => [ROSTER_TEMPLATE_HEAD, ...Array.from({ length: 35 }, (_, i) => [i + 1])];
-  const upload = h('div', { class: 'card', hidden: !S.showUpload },
+  let upOv = null;
+  const closeUp = () => { if (upOv) { upOv.remove(); upOv = null; } };
+  const openUpload = () => { closeUp(); upMsg.replaceChildren(); upOv = h('div', { class: 'overlay', onclick: (e) => { if (e.target === upOv) closeUp(); } }, h('div', { class: 'modal xdlg' }, ...uploadBody())); document.body.append(upOv); };
+  const uploadBody = () => [
     h('h3', null, '엑셀·CSV 파일로 일괄 등록'),
     h('div', { class: 'muted', style: 'line-height:1.7' }, '1) 양식을 받아서 학생 정보를 채우세요.  2) 엑셀로 저장한 파일(.xlsx)이나 CSV를 올리면 한 번에 등록돼요.  성별은 "남/여", "남성/여성", "남자/여자", M/F 모두 알아봐요. 첫 줄 제목의 순서가 바뀌어도 괜찮아요.'),
     h('div', { class: 'row gap', style: 'margin-top:10px' },
@@ -663,19 +644,17 @@ function rosterEditor() {
       } }, '구글 스프레드시트 양식 만들기'),
       h('button', { class: 'primary sm', onclick: () => upFile.click() }, '파일 올리기'), upFile),
     upMsg,
-    h('div', { class: 'row', style: 'margin-top:8px' }, h('button', { class: 'sm', onclick: () => { S.showUpload = false; renderPage(); } }, '닫기')));
+    h('div', { class: 'row', style: 'margin-top:12px;justify-content:flex-end' }, h('button', { onclick: closeUp }, '닫기'))];
 
   return h('div', null,
     h('div', { class: 'card' },
       h('div', { class: 'row gap' },
         h('button', { class: 'sm', onclick: () => { rows.push(blankRow((rows.reduce((m, r) => Math.max(m, Number(r.num) || 0), 0)) + 1)); S.rosterDirty = true; renderPage(); } }, '+ 학생 추가'),
-        h('button', { class: 'sm', onclick: () => { S.showPaste = !S.showPaste; renderPage(); } }, '표 붙여넣기'),
-        h('button', { class: 'sm', onclick: () => { S.showUpload = !S.showUpload; renderPage(); } }, '엑셀·CSV 업로드'),
+        h('button', { class: 'sm', onclick: openUpload }, '엑셀·CSV 업로드'),
         h('span', { class: 'legend' }, h('span', null, h('i', { class: 'dot m' }), '남'), h('span', null, h('i', { class: 'dot f' }), '여')),
         h('div', { style: 'flex:1' }), dirtyEl, saveBtn),
       h('div', { class: 'table-wrap' }, table),
-      h('div', { class: 'muted', style: 'margin-top:8px' }, '성별을 고르면 줄 색이 자동으로 바뀝니다. 이름 3글자 대신 "철수"처럼 부르는 이름은 "호칭"에 적어 두세요.')),
-    upload, paste);
+      h('div', { class: 'muted', style: 'margin-top:8px' }, '성별을 고르면 줄 색이 자동으로 바뀝니다. 이름 3글자 대신 "철수"처럼 부르는 이름은 "호칭"에 적어 두세요.')));
 }
 
 /* ---- 비밀번호 변경 ---- */
